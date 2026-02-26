@@ -1,0 +1,37 @@
+{
+  "browsers": [
+    {"matches": ["chrome"], "name": "Google Chrome"},
+    {"matches": ["msedge", "edge"], "name": "Microsoft Edge"},
+    {"matches": ["firefox"], "name": "Firefox"},
+    {"matches": ["opera"], "name": "Opera"},
+    {"matches": ["yandex"], "name": "Яндекс Браузер"},
+    {"matches": ["brave"], "name": "Brave"}
+  ],
+  "sites": [
+    {"matches": ["youtube", "youtu.be"], "name": "YouTube", "category": "entertainment"},
+    {"matches": ["tiktok"], "name": "TikTok", "category": "entertainment"},
+    {"matches": ["twitch"], "name": "Twitch", "category": "entertainment"},
+    {"matches": ["netflix", "kinopoisk", "rutube"], "name": "Кино/Сериалы", "category": "entertainment"},
+    {"matches": ["spotify", "yandex music", "music.yandex"], "name": "Музыка", "category": "entertainment"},
+    {"matches": ["vk.com", "вконтакте"], "name": "ВКонтакте", "category": "social"},
+    {"matches": ["telegram", "web.telegram"], "name": "Telegram Web", "category": "social"},
+    {"matches": ["whatsapp"], "name": "WhatsApp", "category": "social"},
+    {"matches": ["instagram", "facebook", "twitter", "reddit"], "name": "Соцсети", "category": "social"},
+    {"matches": ["github", "gitlab", "bitbucket"], "name": "GitHub", "category": "study"},
+    {"matches": ["stackoverflow", "habr", "хабр"], "name": "StackOverflow / Хабр", "category": "study"},
+    {"matches": ["chatgpt", "gemini", "claude", "openai"], "name": "Нейросети", "category": "study"},
+    {"matches": ["wikipedia", "википедия"], "name": "Wikipedia", "category": "study"},
+    {"matches": ["notion", "obsidian", "miro", "figma"], "name": "Дизайн и Заметки", "category": "study"}
+  ],
+  "apps": [
+    {"matches": ["code", "visual studio code"], "name": "Visual Studio Code", "category": "study"},
+    {"matches": ["idea", "pycharm", "webstorm", "clion"], "name": "JetBrains IDE", "category": "study"},
+    {"matches": ["word", "excel", "powerpnt"], "name": "Microsoft Office", "category": "study"},
+    {"matches": ["discord"], "name": "Discord", "category": "social"},
+    {"matches": ["telegram"], "name": "Telegram", "category": "social"},
+    {"matches": ["skype", "zoom", "teams", "slack"], "name": "Cозвоны", "category": "social"},
+    {"matches": ["steam", "epicgames", "battle.net"], "name": "Лаунчеры игр", "category": "games"},
+    {"matches": ["dota", "csgo", "minecraft", "valorant", "league", "roblox", "cyberpunk", "gta"], "name": "Игры", "category": "games"},
+    {"matches": ["dailyhabit"], "name": "DailyHabit (Мой проект)", "category": "other"}
+  ]
+}
