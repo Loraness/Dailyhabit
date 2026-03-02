@@ -22,6 +22,8 @@
   "apps": [
     {"matches": ["code", "visual studio code"], "name": "VS Code", "category": "study"},
     {"matches": ["idea", "pycharm", "webstorm", "clion", "rider", "phpstorm"], "name": "JetBrains IDE", "category": "study"},
+    {"matches": ["winword", "excel", "powerpnt", "onenote", "msaccess", "microsoft word", "microsoft excel", "microsoft powerpoint"], "name": "Microsoft Office", "category": "study"},
+    
     {"matches": ["discord"], "name": "Discord", "category": "social"},
     {"matches": ["telegram"], "name": "Telegram", "category": "social"},
     {"matches": ["steam", "steamwebhelper"], "name": "Steam", "category": "games"},

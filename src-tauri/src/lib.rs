@@ -29,6 +29,12 @@ struct ProcessInfo {
 
 fn is_system_process(name: &str) -> bool {
     let lower_name = name.to_lowercase();
+    
+    // Отсеиваем "плавающие" системные процессы Windows (например, панели, календарь)
+    if lower_name.contains("windowsshellexperience") || lower_name.contains("shell experience") || lower_name.contains("searchapplication") {
+        return true;
+    }
+
     let exact_matches = [
         "svchost.exe", "dllhost.exe", "sihost.exe", "taskhostw.exe", 
         "explorer.exe", "searchapp.exe", "startmenuexperiencehost.exe", 
@@ -38,7 +44,7 @@ fn is_system_process(name: &str) -> bool {
         "system", "registry", "conhost.exe", "runtimebroker.exe",
         "aggregatorhost.exe", "applemobiledeviceservice.exe", "applicationframehost.exe",
         "searchindexer.exe", "ctfmon.exe", "smartscreen.exe", "securityhealthservice.exe",
-        "usocoreworker.exe", "unknown"
+        "usocoreworker.exe", "unknown", "screenclippinghost.exe", "winws.exe", "searchhost.exe"
     ];
     
     for sys_app in exact_matches.iter() {

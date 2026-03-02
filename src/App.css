@@ -1,2 +1,36 @@
 @import "tailwindcss";
 @custom-variant dark (&:is(.dark *));
+/* Кастомный скроллбар (светлая тема по умолчанию) */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1; /* Аналог slate-300 */
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8; /* Аналог slate-400 */
+}
+
+/* Кастомный скроллбар (тёмная тема) */
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: #475569; /* Аналог slate-600 */
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: #64748b; /* Аналог slate-500 */
+}
+
+/* Системные элементы (включая скроллы по умолчанию) подстраиваем под тёмную тему */
+html.dark {
+  color-scheme: dark;
+}
