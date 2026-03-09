@@ -21,20 +21,16 @@ struct AppUsage {
 }
 
 #[derive(serde::Serialize)]
-struct ProcessInfo {
-    name: String,
-    uptime: u64,
-    memory: u64,
+struct DailyTotal {
+    date: String,
+    total_active: i32,
 }
 
 fn is_system_process(name: &str) -> bool {
     let lower_name = name.to_lowercase();
-    
-    // Отсеиваем "плавающие" системные процессы Windows (например, панели, календарь)
     if lower_name.contains("windowsshellexperience") || lower_name.contains("shell experience") || lower_name.contains("searchapplication") {
         return true;
     }
-
     let exact_matches = [
         "svchost.exe", "dllhost.exe", "sihost.exe", "taskhostw.exe", 
         "explorer.exe", "searchapp.exe", "startmenuexperiencehost.exe", 
@@ -46,11 +42,8 @@ fn is_system_process(name: &str) -> bool {
         "searchindexer.exe", "ctfmon.exe", "smartscreen.exe", "securityhealthservice.exe",
         "usocoreworker.exe", "unknown", "screenclippinghost.exe", "winws.exe", "searchhost.exe"
     ];
-    
     for sys_app in exact_matches.iter() {
-        if lower_name == *sys_app || lower_name == sys_app.replace(".exe", "") {
-            return true;
-        }
+        if lower_name == *sys_app || lower_name == sys_app.replace(".exe", "") { return true; }
     }
     false
 }
@@ -114,33 +107,26 @@ fn get_clean_name(app_name: &str, title: &str, rules: &serde_json::Value) -> Str
             }
         }
         if !app_found {
-            if lower_app.ends_with(".exe") {
-                final_name = final_name[..final_name.len() - 4].to_string();
-            }
+            if lower_app.ends_with(".exe") { final_name = final_name[..final_name.len() - 4].to_string(); }
             let mut chars = final_name.chars();
             if let Some(first_char) = chars.next() {
                 final_name = format!("{}{}", first_char.to_uppercase(), chars.as_str());
-            } else {
-                final_name = "Unknown".to_string();
-            }
+            } else { final_name = "Unknown".to_string(); }
         }
     }
     final_name
 }
 
+// 1. Получение статистики за конкретный день (формат YYYY-MM-DD)
 #[tauri::command]
-fn get_all_today_time(state: State<'_, AppState>) -> Result<Vec<AppUsage>, String> {
+fn get_stats_for_date(state: State<'_, AppState>, date: String) -> Result<Vec<AppUsage>, String> {
     let conn = state.conn.lock().unwrap();
     let mut stmt = conn
-        .prepare("SELECT app_name, active_duration, background_duration FROM daily_stats WHERE date = date('now', 'localtime')")
+        .prepare("SELECT app_name, active_duration, background_duration FROM daily_stats WHERE date = ?1")
         .map_err(|e| e.to_string())?;
     
-    let app_iter = stmt.query_map([], |row| {
-        Ok(AppUsage {
-            name: row.get(0)?,
-            active_duration: row.get(1)?,
-            background_duration: row.get(2)?,
-        })
+    let app_iter = stmt.query_map([date], |row| {
+        Ok(AppUsage { name: row.get(0)?, active_duration: row.get(1)?, background_duration: row.get(2)? })
     }).map_err(|e| e.to_string())?;
 
     let mut usage = Vec::new();
@@ -148,43 +134,20 @@ fn get_all_today_time(state: State<'_, AppState>) -> Result<Vec<AppUsage>, Strin
     Ok(usage)
 }
 
+// 2. Получение общей статистики за весь месяц для Календаря (формат YYYY-MM)
 #[tauri::command]
-fn get_running_processes(state: State<'_, AppState>) -> Result<Vec<ProcessInfo>, String> {
+fn get_month_stats(state: State<'_, AppState>, month: String) -> Result<Vec<DailyTotal>, String> {
     let conn = state.conn.lock().unwrap();
-    let mut stmt = conn.prepare("SELECT app_name FROM daily_stats WHERE date = date('now', 'localtime') AND active_duration > 0").map_err(|e| e.to_string())?;
-    let known_apps_iter = stmt.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    let query = "SELECT date, SUM(active_duration) FROM daily_stats WHERE date LIKE ?1 GROUP BY date";
+    let mut stmt = conn.prepare(query).map_err(|e| e.to_string())?;
     
-    let mut known_apps = HashSet::new();
-    for app in known_apps_iter {
-        if let Ok(name) = app { known_apps.insert(name); }
-    }
-    drop(stmt);
+    let iter = stmt.query_map([format!("{}%", month)], |row| {
+        Ok(DailyTotal { date: row.get(0)?, total_active: row.get(1)? })
+    }).map_err(|e| e.to_string())?;
 
-    // ОПТИМИЗАЦИЯ: System::new() вместо System::new_all(). Не сканируем диски и сеть!
-    let mut sys = System::new();
-    sys.refresh_processes();
-    let mut proc_map: HashMap<String, ProcessInfo> = HashMap::new();
-    
-    for (_pid, process) in sys.processes() {
-        let raw_name = process.name().to_string();
-        if is_system_process(&raw_name) || raw_name.to_lowercase().contains("dailyhabit") { continue; }
-
-        let clean_name = get_clean_name(&raw_name, "", &state.rules);
-
-        if !known_apps.contains(&clean_name) { continue; }
-
-        let uptime = process.run_time(); 
-        if uptime > 31536000 { continue; }
-        let memory = process.memory() / 1024 / 1024; 
-        
-        let entry = proc_map.entry(clean_name.clone()).or_insert(ProcessInfo { name: clean_name, uptime: 0, memory: 0 });
-        if uptime > entry.uptime { entry.uptime = uptime; }
-        entry.memory += memory;
-    }
-    
-    let mut processes: Vec<ProcessInfo> = proc_map.into_values().collect();
-    processes.sort_by(|a, b| b.memory.cmp(&a.memory)); 
-    Ok(processes)
+    let mut res = Vec::new();
+    for item in iter { res.push(item.unwrap()); }
+    Ok(res)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -218,7 +181,6 @@ pub fn run() {
             app.manage(AppState { conn: db_conn, rules });
 
             thread::spawn(move || {
-                // ОПТИМИЗАЦИЯ ТРЕКЕРА: Выделяем память только под процессы
                 let mut sys = System::new();
                 loop {
                     thread::sleep(Duration::from_secs(5));
@@ -267,7 +229,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_all_today_time, get_running_processes])
+        .invoke_handler(tauri::generate_handler![get_stats_for_date, get_month_stats])
         .run(tauri::generate_context!())
         .expect("error");
 }
