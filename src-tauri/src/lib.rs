@@ -5,8 +5,9 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use sysinfo::{ProcessExt, System, SystemExt};
 use tauri::{Manager, State};
-use sysinfo::{System, SystemExt, ProcessExt};
+use tauri_plugin_autostart::MacosLauncher;
 
 struct AppState {
     conn: Arc<Mutex<Connection>>,
@@ -28,33 +29,70 @@ struct DailyTotal {
 
 fn is_system_process(name: &str) -> bool {
     let lower_name = name.to_lowercase();
-    if lower_name.contains("windowsshellexperience") || lower_name.contains("shell experience") || lower_name.contains("searchapplication") {
+    if lower_name.contains("windowsshellexperience")
+        || lower_name.contains("shell experience")
+        || lower_name.contains("searchapplication")
+    {
         return true;
     }
     let exact_matches = [
-        "svchost.exe", "dllhost.exe", "sihost.exe", "taskhostw.exe", 
-        "explorer.exe", "searchapp.exe", "startmenuexperiencehost.exe", 
-        "csrss.exe", "smss.exe", "wininit.exe", "services.exe", 
-        "lsass.exe", "winlogon.exe", "fontdrvhost.exe", "dwm.exe", 
-        "spoolsv.exe", "memory compression", "system idle process", 
-        "system", "registry", "conhost.exe", "runtimebroker.exe",
-        "aggregatorhost.exe", "applemobiledeviceservice.exe", "applicationframehost.exe",
-        "searchindexer.exe", "ctfmon.exe", "smartscreen.exe", "securityhealthservice.exe",
-        "usocoreworker.exe", "unknown", "screenclippinghost.exe", "winws.exe", "searchhost.exe"
+        "svchost.exe",
+        "dllhost.exe",
+        "sihost.exe",
+        "taskhostw.exe",
+        "explorer.exe",
+        "searchapp.exe",
+        "startmenuexperiencehost.exe",
+        "csrss.exe",
+        "smss.exe",
+        "wininit.exe",
+        "services.exe",
+        "lsass.exe",
+        "winlogon.exe",
+        "fontdrvhost.exe",
+        "dwm.exe",
+        "spoolsv.exe",
+        "memory compression",
+        "system idle process",
+        "system",
+        "registry",
+        "conhost.exe",
+        "runtimebroker.exe",
+        "aggregatorhost.exe",
+        "applemobiledeviceservice.exe",
+        "applicationframehost.exe",
+        "searchindexer.exe",
+        "ctfmon.exe",
+        "smartscreen.exe",
+        "securityhealthservice.exe",
+        "usocoreworker.exe",
+        "unknown",
+        "screenclippinghost.exe",
+        "winws.exe",
+        "searchhost.exe",
     ];
     for sys_app in exact_matches.iter() {
-        if lower_name == *sys_app || lower_name == sys_app.replace(".exe", "") { return true; }
+        if lower_name == *sys_app || lower_name == sys_app.replace(".exe", "") {
+            return true;
+        }
     }
     false
 }
 
 fn get_clean_name(app_name: &str, title: &str, rules: &serde_json::Value) -> String {
-    let clean_app_name: String = app_name.chars().filter(|c| c.is_alphanumeric() || c.is_ascii_punctuation() || *c == ' ').collect();
+    let clean_app_name: String = app_name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_ascii_punctuation() || *c == ' ')
+        .collect();
     let lower_app = clean_app_name.to_lowercase();
     let lower_title = title.to_lowercase();
-    
-    if lower_app.contains("spotify") { return "Spotify".to_string(); }
-    if lower_app.contains("discord") { return "Discord".to_string(); }
+
+    if lower_app.contains("spotify") {
+        return "Spotify".to_string();
+    }
+    if lower_app.contains("discord") {
+        return "Discord".to_string();
+    }
 
     let mut final_name = clean_app_name.clone();
     let mut is_browser = false;
@@ -70,7 +108,9 @@ fn get_clean_name(app_name: &str, title: &str, rules: &serde_json::Value) -> Str
                     }
                 }
             }
-            if is_browser { break; }
+            if is_browser {
+                break;
+            }
         }
     }
 
@@ -87,7 +127,9 @@ fn get_clean_name(app_name: &str, title: &str, rules: &serde_json::Value) -> Str
                         }
                     }
                 }
-                if site_found { break; }
+                if site_found {
+                    break;
+                }
             }
         }
     } else if !is_browser {
@@ -96,22 +138,30 @@ fn get_clean_name(app_name: &str, title: &str, rules: &serde_json::Value) -> Str
             for a in apps {
                 if let Some(matches) = a["matches"].as_array() {
                     for m in matches {
-                        if lower_app.contains(m.as_str().unwrap_or("")) || lower_title.contains(m.as_str().unwrap_or("")) {
+                        if lower_app.contains(m.as_str().unwrap_or(""))
+                            || lower_title.contains(m.as_str().unwrap_or(""))
+                        {
                             final_name = a["name"].as_str().unwrap_or("Unknown App").to_string();
                             app_found = true;
                             break;
                         }
                     }
                 }
-                if app_found { break; }
+                if app_found {
+                    break;
+                }
             }
         }
         if !app_found {
-            if lower_app.ends_with(".exe") { final_name = final_name[..final_name.len() - 4].to_string(); }
+            if lower_app.ends_with(".exe") {
+                final_name = final_name[..final_name.len() - 4].to_string();
+            }
             let mut chars = final_name.chars();
             if let Some(first_char) = chars.next() {
                 final_name = format!("{}{}", first_char.to_uppercase(), chars.as_str());
-            } else { final_name = "Unknown".to_string(); }
+            } else {
+                final_name = "Unknown".to_string();
+            }
         }
     }
     final_name
@@ -124,13 +174,21 @@ fn get_stats_for_date(state: State<'_, AppState>, date: String) -> Result<Vec<Ap
     let mut stmt = conn
         .prepare("SELECT app_name, active_duration, background_duration FROM daily_stats WHERE date = ?1")
         .map_err(|e| e.to_string())?;
-    
-    let app_iter = stmt.query_map([date], |row| {
-        Ok(AppUsage { name: row.get(0)?, active_duration: row.get(1)?, background_duration: row.get(2)? })
-    }).map_err(|e| e.to_string())?;
+
+    let app_iter = stmt
+        .query_map([date], |row| {
+            Ok(AppUsage {
+                name: row.get(0)?,
+                active_duration: row.get(1)?,
+                background_duration: row.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
 
     let mut usage = Vec::new();
-    for app in app_iter { usage.push(app.unwrap()); }
+    for app in app_iter {
+        usage.push(app.unwrap());
+    }
     Ok(usage)
 }
 
@@ -138,24 +196,51 @@ fn get_stats_for_date(state: State<'_, AppState>, date: String) -> Result<Vec<Ap
 #[tauri::command]
 fn get_month_stats(state: State<'_, AppState>, month: String) -> Result<Vec<DailyTotal>, String> {
     let conn = state.conn.lock().unwrap();
-    let query = "SELECT date, SUM(active_duration) FROM daily_stats WHERE date LIKE ?1 GROUP BY date";
+    let query =
+        "SELECT date, SUM(active_duration) FROM daily_stats WHERE date LIKE ?1 GROUP BY date";
     let mut stmt = conn.prepare(query).map_err(|e| e.to_string())?;
-    
-    let iter = stmt.query_map([format!("{}%", month)], |row| {
-        Ok(DailyTotal { date: row.get(0)?, total_active: row.get(1)? })
-    }).map_err(|e| e.to_string())?;
+
+    let iter = stmt
+        .query_map([format!("{}%", month)], |row| {
+            Ok(DailyTotal {
+                date: row.get(0)?,
+                total_active: row.get(1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
 
     let mut res = Vec::new();
-    for item in iter { res.push(item.unwrap()); }
+    for item in iter {
+        res.push(item.unwrap());
+    }
     Ok(res)
 }
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Инициализируем плагин одного окна
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
+        // Инициализируем плагин автозапуска (передаем флаг --autostart)
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // Проверяем, запущен ли апп пользователем или автозапуском
+            let args: Vec<String> = std::env::args().collect();
+            if !args.contains(&"--autostart".to_string()) {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+
             let app_data_dir = app.path().app_data_dir().unwrap();
+
             fs::create_dir_all(&app_data_dir).unwrap();
             let db_path = app_data_dir.join("dailyhabit.db");
             

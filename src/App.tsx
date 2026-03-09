@@ -2,13 +2,16 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { enable, isEnabled, disable } from '@tauri-apps/plugin-autostart';
 import './App.css';
 import rules from './rules.json';
 
 const Titlebar = () => {
   const minimize = async () => { try { await getCurrentWindow().minimize(); } catch (e) { console.error("Ошибка:", e); } };
   const maximize = async () => { try { await getCurrentWindow().toggleMaximize(); } catch (e) { console.error("Ошибка:", e); } };
-  const closeApp = async () => { try { await getCurrentWindow().close(); } catch (e) { console.error("Ошибка:", e); } };
+  const closeApp = async () => { try { await getCurrentWindow().hide(); } catch (e) { console.error("Ошибка:", e); } };
+
+
 
   const startDrag = async (e: React.MouseEvent) => {
     if (e.buttons === 1) { try { await getCurrentWindow().startDragging(); } catch (error) { console.error(error); } }
@@ -83,6 +86,35 @@ function App() {
   });
   const [colorPanel, setColorPanel] = useState<{ visible: boolean, appName: string } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [autoStartEnabled, setAutoStartEnabled] = useState(true);
+
+  // Эффект для проверки статуса автозапуска
+  useEffect(() => {
+    const checkAutostart = async () => {
+      try {
+        const enabled = await isEnabled();
+        setAutoStartEnabled(enabled);
+        
+        // Включаем по умолчанию при самом первом запуске приложения
+        const hasSetDefault = localStorage.getItem('autostart_initialized');
+        if (!hasSetDefault) {
+           await enable();
+           setAutoStartEnabled(true);
+           localStorage.setItem('autostart_initialized', 'true');
+        }
+      } catch (e) { console.error("Ошибка автозапуска:", e); }
+    };
+    checkAutostart();
+  }, []);
+
+  const toggleAutoStart = async () => {
+    try {
+      if (autoStartEnabled) { await disable(); setAutoStartEnabled(false); }
+      else { await enable(); setAutoStartEnabled(true); }
+    } catch (e) { console.error(e); }
+  };
+
   const [refreshKey, setRefreshKey] = useState(0);
   
   // Дата по умолчанию: сегодня
@@ -127,6 +159,17 @@ function App() {
 
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      const now = Date.now();
+      if (now - lastFetchTime.current < 10000) return;
+      lastFetchTime.current = now; 
+      fetchData(true);
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [fetchData]);
 
   const handleColorChange = (appName: string, color: string) => {
     const updated = { ...customColors, [appName]: color };
@@ -283,9 +326,14 @@ function App() {
                 <button onClick={() => setActiveTab('dashboard')} className={`whitespace-nowrap px-4 py-2.5 rounded-xl font-medium transition-all ${activeTab === 'dashboard' ? 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>📊 Дашборд</button>
                 <button onClick={() => setActiveTab('categories')} className={`whitespace-nowrap px-4 py-2.5 rounded-xl font-medium transition-all ${activeTab === 'categories' ? 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>🗂️ Категории</button>
                 <button onClick={() => setActiveTab('calendar')} className={`whitespace-nowrap px-4 py-2.5 rounded-xl font-medium transition-all ${activeTab === 'calendar' ? 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>📅 Календарь</button>
+                <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1 self-center"></div>
+                <button onClick={() => setIsSettingsOpen(true)} className="p-2.5 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 focus:outline-none" title="Настройки">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                </button>
               </div>
             </div>
           </header>
+
 
           {/* ЕДИНАЯ ПАНЕЛЬ ДЛЯ ДАШБОРДА И КАТЕГОРИЙ: Переключатель + Выбор Даты */}
           {(activeTab === 'dashboard' || activeTab === 'categories') && (
@@ -445,6 +493,50 @@ function App() {
               </div>
             </div>
           )}
+
+          {/* МОДАЛЬНОЕ ОКНО НАСТРОЕК */}
+          {isSettingsOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 dark:bg-slate-900/60 backdrop-blur-sm transition-all p-4" onClick={() => setIsSettingsOpen(false)}>
+              <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-700 w-full max-w-md animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2">
+                    <svg className="w-6 h-6 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    Настройки
+                  </h3>
+                  <button onClick={() => setIsSettingsOpen(false)} className="w-8 h-8 flex justify-center items-center rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors flex-shrink-0" title="Закрыть">✕</button>
+                </div>
+                
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-700">
+                    <div className="pr-4">
+                      <h4 className="font-semibold text-slate-700 dark:text-slate-200">Запускать по умолчанию</h4>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-snug">При запуске ПК приложение будет работать в фоне. Откройте его ярлыком, чтобы посмотреть статистику.</p>
+                    </div>
+                    <button 
+                      onClick={toggleAutoStart}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none ${autoStartEnabled ? 'bg-indigo-500' : 'bg-slate-300 dark:bg-slate-600'}`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${autoStartEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                    </button>
+                  </div>
+
+                  {/* КНОПКА ДЛЯ ПОЛНОГО ЗАКРЫТИЯ ПРИЛОЖЕНИЯ */}
+                  <div className="pt-2">
+                    <button 
+                      onClick={async () => {
+                        try { await getCurrentWindow().close(); } catch (e) { console.error(e); }
+                      }}
+                      className="w-full py-3 rounded-xl font-semibold text-red-500 bg-red-50 hover:bg-red-100 dark:bg-red-500/10 dark:hover:bg-red-500/20 transition-colors"
+                    >
+                      Полностью закрыть приложение
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          )}
+
 
           {/* НОВОЕ МОДАЛЬНОЕ ОКНО ДЛЯ ВЫБОРА ДАТЫ (ВЫЗЫВАЕТСЯ ИЗ ДАШБОРДА/КАТЕГОРИЙ) */}
           {isDatePickerOpen && (
