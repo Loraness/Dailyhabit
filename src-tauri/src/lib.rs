@@ -1,6 +1,5 @@
 use active_win_pos_rs::get_active_window;
 use rusqlite::{params, Connection};
-use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -8,7 +7,7 @@ use std::time::Duration;
 use sysinfo::{ProcessExt, System, SystemExt};
 use tauri::{Manager, State};
 use tauri_plugin_autostart::MacosLauncher;
-
+use std::collections::HashSet;
 struct AppState {
     conn: Arc<Mutex<Connection>>,
     rules: serde_json::Value,
@@ -215,6 +214,30 @@ fn get_month_stats(state: State<'_, AppState>, month: String) -> Result<Vec<Dail
     }
     Ok(res)
 }
+
+// Специальная команда для принудительного показа окна
+// Специальная команда для принудительного показа окна
+#[tauri::command]
+fn show_window(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        // 1. Показываем и разворачиваем из свернутого состояния
+        let _ = window.show();
+        let _ = window.unminimize();
+        
+        // 2. Жестко ставим поверх всех окон и запрашиваем фокус
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_focus();
+
+        // 3. МАГИЯ ЗДЕСЬ: Ждем 400 мс в отдельном потоке, чтобы винда реально 
+        // отрисовала окно поверх игры или браузера, и только потом снимаем флаг.
+        let window_clone = window.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let _ = window_clone.set_always_on_top(false);
+        });
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -313,7 +336,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_stats_for_date, get_month_stats])
+        .invoke_handler(tauri::generate_handler![get_stats_for_date, get_month_stats, show_window])
         .run(tauri::generate_context!())
         .expect("error");
 }

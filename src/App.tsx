@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { enable, isEnabled, disable } from '@tauri-apps/plugin-autostart';
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import './App.css';
 import rules from './rules.json';
 
@@ -116,7 +115,12 @@ function App() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [autoStartEnabled, setAutoStartEnabled] = useState(true);
+// Состояние функции "Поверх окон"
+  const [bringToFrontEnabled, setBringToFrontEnabled] = useState(() => localStorage.getItem('bringToFront') === 'true');
 
+  useEffect(() => {
+    localStorage.setItem('bringToFront', bringToFrontEnabled.toString());
+  }, [bringToFrontEnabled]);
   // Эффект для проверки статуса автозапуска
   useEffect(() => {
     const checkAutostart = async () => {
@@ -190,6 +194,17 @@ function App() {
   // --- ЛОГИКА ТАЙМЕРА ---
   useEffect(() => {
     let interval: any = null;
+
+    // Функция для вывода окна на передний план
+    const bringWindowToFront = async () => {
+      if (!bringToFrontEnabled) return;
+      try {
+        await invoke('show_window');
+      } catch (e) {
+        console.error("Ошибка фокуса окна:", e);
+      }
+    };
+
     if (timerActive && timeLeft > 0) {
       interval = setInterval(() => setTimeLeft((t) => t - 1), 1000);
     } else if (timerActive && timeLeft === 0) {
@@ -197,8 +212,7 @@ function App() {
       if (timerState === 'work') {
         
         try { new Audio('/audio/end_focus.mp3').play(); } catch (e) { console.error(e); }
-        // 💬 Всплывающее уведомление о начале отдыха
-        notifyUser('DailyHabit ⏱️', 'Время фокуса вышло. Пора отдохнуть!');
+        bringWindowToFront(); // Делаем окно активным
 
         if (currentCycle < Number(timerSettings.cycles)) {
           setTimerState('rest');
@@ -210,14 +224,11 @@ function App() {
           setTimerActive(false);
           setTimerState('idle');
           setCurrentCycle(1);
-          // 💬 Уведомление, если все циклы завершены
-          notifyUser('DailyHabit 🏁', 'Все циклы успешно завершены!');
         }
       } else if (timerState === 'rest') {
         
         try { new Audio('/audio/end_freetime.mp3').play(); } catch (e) { console.error(e); }
-        // 💬 Всплывающее уведомление о начале работы
-        notifyUser('DailyHabit 🚀', 'Отдых окончен. Пора за работу!');
+        bringWindowToFront(); // Делаем окно активным
 
         setCurrentCycle((c) => c + 1);
         setTimerState('work');
@@ -228,7 +239,7 @@ function App() {
       }
     }
     return () => clearInterval(interval);
-  }, [timerActive, timeLeft, timerState, currentCycle, timerSettings]);
+  }, [timerActive, timeLeft, timerState, currentCycle, timerSettings, bringToFrontEnabled]);
 
   const isTimerValid = timerSettings.workMinutes !== '' && timerSettings.restMinutes !== '' && timerSettings.cycles !== '';
 
@@ -299,21 +310,6 @@ function App() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  // Функция безопасной отправки системного уведомления
-  const notifyUser = async (title: string, body: string) => {
-    try {
-      let permissionGranted = await isPermissionGranted();
-      if (!permissionGranted) {
-        const permission = await requestPermission();
-        permissionGranted = permission === 'granted';
-      }
-      if (permissionGranted) {
-        sendNotification({ title, body });
-      }
-    } catch (e) {
-      console.error("Ошибка уведомления:", e);
-    }
-  };
   // Вычисление смещения для кругового прогресса
   const timerRadius = 130;
   const timerCircumference = 2 * Math.PI * timerRadius;
@@ -797,6 +793,20 @@ function App() {
                       className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none ${autoStartEnabled ? 'bg-indigo-500' : 'bg-slate-300 dark:bg-slate-600'}`}
                     >
                       <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${autoStartEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                    </button>
+                  </div>
+
+                  {/* НОВАЯ НАСТРОЙКА: ПОВЕРХ ОКОН */}
+                  <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-700">
+                    <div className="pr-4">
+                      <h4 className="font-semibold text-slate-700 dark:text-slate-200">Поверх всех окон</h4>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-snug">Разворачивать приложение и делать его активным при окончании фазы таймера.</p>
+                    </div>
+                    <button 
+                      onClick={() => setBringToFrontEnabled(!bringToFrontEnabled)}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none ${bringToFrontEnabled ? 'bg-indigo-500' : 'bg-slate-300 dark:bg-slate-600'}`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${bringToFrontEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
                     </button>
                   </div>
 
