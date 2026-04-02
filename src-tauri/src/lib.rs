@@ -218,6 +218,7 @@ fn get_month_stats(state: State<'_, AppState>, month: String) -> Result<Vec<Dail
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         // Инициализируем плагин одного окна
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -242,8 +243,7 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir().unwrap();
 
             fs::create_dir_all(&app_data_dir).unwrap();
-            let db_path = app_data_dir.join("dailyhabit.db");
-            
+            let db_path = app_data_dir.join("dailyhabit.db");  
             let conn = Connection::open(db_path).unwrap();
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS daily_stats (
@@ -258,7 +258,6 @@ pub fn run() {
 
             let db_conn = Arc::new(Mutex::new(conn));
             let db_conn_for_thread = Arc::clone(&db_conn);
-            
             let rules_str = include_str!("../../src/rules.json");
             let rules: serde_json::Value = serde_json::from_str(rules_str).unwrap();
             let rules_for_thread = Arc::new(rules.clone());

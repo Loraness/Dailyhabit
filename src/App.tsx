@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { enable, isEnabled, disable } from '@tauri-apps/plugin-autostart';
+import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import './App.css';
 import rules from './rules.json';
 
@@ -75,7 +76,34 @@ const RefreshButton = ({ onRefresh, isRefreshing }: { onRefresh: () => void, isR
 
 function App() {
   const [appsData, setAppsData] = useState<AppUsage[]>([]);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'categories' | 'calendar'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'categories' | 'timer'>('dashboard');
+  
+  // --- СОСТОЯНИЯ ТАЙМЕРА ---
+  const [timerState, setTimerState] = useState<'idle' | 'work' | 'rest'>('idle');
+  const [timeLeft, setTimeLeft] = useState(0);
+  const [totalPhaseTime, setTotalPhaseTime] = useState(1);
+  const [timerActive, setTimerActive] = useState(false);
+  const [currentCycle, setCurrentCycle] = useState(1);
+  
+  // Настройки пресета таймера
+  const [timerSettings, setTimerSettings] = useState<{
+    workMinutes: number | '';
+    restMinutes: number | '';
+    cycles: number | '';
+    autoStartNextPhase: boolean; // <-- Новое свойство
+  }>({
+    workMinutes: 50,
+    restMinutes: 10,
+    cycles: 3,
+    autoStartNextPhase: false // <-- По умолчанию выключено (ставится на паузу)
+  });
+
+  // Умный режим (для калькулятора)
+  const [smartCalc, setSmartCalc] = useState({
+    totalWorkHours: 3,
+    totalRestMinutes: 40,
+    restCount: 3
+  });
   const [viewMode, setViewMode] = useState<'active' | 'background'>('active');
   const [showAllApps, setShowAllApps] = useState(false);
   const [chartLimit, setChartLimit] = useState<5 | 10>(5);
@@ -136,8 +164,8 @@ function App() {
   const fetchData = useCallback(async (withAnimation = false) => {
     if (withAnimation) setIsRefreshing(true);
     try {
-      // Запрашиваем данные за месяц, если открыт таб "Календарь" ИЛИ если открыта модалка выбора даты
-      if (activeTab === 'calendar' || isDatePickerOpen) {
+      // Запрашиваем данные за месяц, если открыта модалка выбора даты
+      if (isDatePickerOpen) {
 
         const y = calendarMonth.getFullYear();
         const m = String(calendarMonth.getMonth() + 1).padStart(2, '0');
@@ -155,11 +183,144 @@ function App() {
       setRefreshKey(prev => prev + 1); 
       setTimeout(() => setIsRefreshing(false), 2500); 
     }
-  }, [activeTab, selectedDate, calendarMonth, isDatePickerOpen]);
+  }, [selectedDate, calendarMonth, isDatePickerOpen]);
 
 
   useEffect(() => { fetchData(); }, [fetchData]);
+  // --- ЛОГИКА ТАЙМЕРА ---
+  useEffect(() => {
+    let interval: any = null;
+    if (timerActive && timeLeft > 0) {
+      interval = setInterval(() => setTimeLeft((t) => t - 1), 1000);
+    } else if (timerActive && timeLeft === 0) {
+      // Переключение фаз, когда время вышло
+      if (timerState === 'work') {
+        
+        try { new Audio('/audio/end_focus.mp3').play(); } catch (e) { console.error(e); }
+        // 💬 Всплывающее уведомление о начале отдыха
+        notifyUser('DailyHabit ⏱️', 'Время фокуса вышло. Пора отдохнуть!');
 
+        if (currentCycle < Number(timerSettings.cycles)) {
+          setTimerState('rest');
+          setTimeLeft(Number(timerSettings.restMinutes) * 60);
+          setTotalPhaseTime(Number(timerSettings.restMinutes) * 60);
+          
+          if (!timerSettings.autoStartNextPhase) setTimerActive(false); 
+        } else {
+          setTimerActive(false);
+          setTimerState('idle');
+          setCurrentCycle(1);
+          // 💬 Уведомление, если все циклы завершены
+          notifyUser('DailyHabit 🏁', 'Все циклы успешно завершены!');
+        }
+      } else if (timerState === 'rest') {
+        
+        try { new Audio('/audio/end_freetime.mp3').play(); } catch (e) { console.error(e); }
+        // 💬 Всплывающее уведомление о начале работы
+        notifyUser('DailyHabit 🚀', 'Отдых окончен. Пора за работу!');
+
+        setCurrentCycle((c) => c + 1);
+        setTimerState('work');
+        setTimeLeft(Number(timerSettings.workMinutes) * 60);
+        setTotalPhaseTime(Number(timerSettings.workMinutes) * 60);
+        
+        if (!timerSettings.autoStartNextPhase) setTimerActive(false);
+      }
+    }
+    return () => clearInterval(interval);
+  }, [timerActive, timeLeft, timerState, currentCycle, timerSettings]);
+
+  const isTimerValid = timerSettings.workMinutes !== '' && timerSettings.restMinutes !== '' && timerSettings.cycles !== '';
+
+  const toggleTimer = () => {
+    if (timerState === 'idle') {
+      if (!isTimerValid) return; // Блокировка запуска, если что-то не заполнено
+      const work = Number(timerSettings.workMinutes);
+      setTimerState('work');
+      setTimeLeft(work * 60);
+      setTotalPhaseTime(work * 60);
+      setCurrentCycle(1);
+    }
+    setTimerActive(!timerActive);
+  };
+
+  const stopTimer = () => {
+    setTimerActive(false);
+    setTimerState('idle');
+    setTimeLeft(0);
+    setCurrentCycle(1);
+  };
+
+  // Умный обработчик ввода цифр
+  const handleSettingChange = (field: 'workMinutes' | 'restMinutes' | 'cycles', value: string) => {
+    // Убираем всё, кроме цифр (никаких минусов, точек и букв)
+    const cleanValue = value.replace(/\D/g, '');
+
+    if (cleanValue === '') {
+      setTimerSettings({ ...timerSettings, [field]: '' });
+      return;
+    }
+
+    let num = parseInt(cleanValue, 10);
+
+    // Ограничения 999
+    if (num > 999) num = 999;
+
+    // 0 циклов или 0 минут работы превращаем в 1 (но отдых может быть 0)
+    if (field === 'cycles' && num === 0) num = 1;
+    if (field === 'workMinutes' && num === 0) num = 1;
+
+    setTimerSettings({ ...timerSettings, [field]: num });
+  };
+
+  const applySmartCalc = () => {
+    const workMins = Math.floor((smartCalc.totalWorkHours * 60) / (smartCalc.restCount + 1));
+    const restMins = Math.floor(smartCalc.totalRestMinutes / smartCalc.restCount);
+    setTimerSettings(prev => ({
+      ...prev,
+      workMinutes: workMins,
+      restMinutes: restMins,
+      cycles: smartCalc.restCount + 1
+    }));
+  };
+
+  const setAutoPreset = () => {
+    setTimerSettings(prev => ({
+      ...prev,
+      workMinutes: 50,
+      restMinutes: 10,
+      cycles: 3
+    }));
+  };
+
+  const formatTimerDisplay = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  // Функция безопасной отправки системного уведомления
+  const notifyUser = async (title: string, body: string) => {
+    try {
+      let permissionGranted = await isPermissionGranted();
+      if (!permissionGranted) {
+        const permission = await requestPermission();
+        permissionGranted = permission === 'granted';
+      }
+      if (permissionGranted) {
+        sendNotification({ title, body });
+      }
+    } catch (e) {
+      console.error("Ошибка уведомления:", e);
+    }
+  };
+  // Вычисление смещения для кругового прогресса
+  const timerRadius = 130;
+  const timerCircumference = 2 * Math.PI * timerRadius;
+  const timerOffset = timerCircumference - (timeLeft / totalPhaseTime) * timerCircumference;
+
+
+  
   useEffect(() => {
     const handleFocus = () => {
       const now = Date.now();
@@ -325,7 +486,7 @@ function App() {
               <div className="bg-white dark:bg-slate-800 p-1.5 rounded-2xl shadow-sm flex space-x-1 border border-slate-100 dark:border-slate-700 overflow-x-auto">
                 <button onClick={() => setActiveTab('dashboard')} className={`whitespace-nowrap px-4 py-2.5 rounded-xl font-medium transition-all ${activeTab === 'dashboard' ? 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>📊 Дашборд</button>
                 <button onClick={() => setActiveTab('categories')} className={`whitespace-nowrap px-4 py-2.5 rounded-xl font-medium transition-all ${activeTab === 'categories' ? 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>🗂️ Категории</button>
-                <button onClick={() => setActiveTab('calendar')} className={`whitespace-nowrap px-4 py-2.5 rounded-xl font-medium transition-all ${activeTab === 'calendar' ? 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>📅 Календарь</button>
+                <button onClick={() => setActiveTab('timer')} className={`whitespace-nowrap px-4 py-2.5 rounded-xl font-medium transition-all ${activeTab === 'timer' ? 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>⏱️ Таймер</button>
                 <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1 self-center"></div>
                 <button onClick={() => setIsSettingsOpen(true)} className="p-2.5 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 focus:outline-none" title="Настройки">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
@@ -467,29 +628,148 @@ function App() {
               </div>
             </div>
           )}
-          {activeTab === 'calendar' && (
-            // Ограничение max-w-4xl и mx-auto не дает календарю растянуться
-            <div className="bg-white dark:bg-slate-800 rounded-3xl p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-none border border-transparent dark:border-slate-700 max-w-4xl mx-auto">
-              <div className="flex justify-between items-center mb-8">
-                <h2 className="text-2xl font-bold text-slate-700 dark:text-slate-200">История активности</h2>
-                <div className="flex items-center space-x-4">
-                  <button onClick={() => changeMonth(-1)} className="p-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-xl transition-colors text-slate-600 dark:text-slate-300">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
+
+          {activeTab === 'timer' && (
+            <div className="flex flex-col sm:flex-row gap-4 md:gap-6 max-w-5xl mx-auto pb-10">
+              
+              {/* ЛЕВАЯ ПАНЕЛЬ: Круговой Таймер */}
+              {/* min-w-0 позволяет блоку сжиматься, игнорируя минимальную ширину контента */}
+              <div className="flex-1 min-w-0 w-full bg-white dark:bg-slate-800 rounded-3xl p-4 sm:p-6 lg:p-10 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-none border border-transparent dark:border-slate-700 flex flex-col items-center justify-center relative overflow-hidden min-h-[400px] sm:min-h-[450px]">
+                
+                {/* Декоративный хай-тек фон */}
+                <div className="absolute inset-0 opacity-20 pointer-events-none flex items-center justify-center">
+                   <div className="w-[300px] h-[300px] sm:w-[400px] sm:h-[400px] border border-indigo-500/20 rounded-full animate-[spin_60s_linear_infinite] border-dashed"></div>
+                   <div className="absolute w-[200px] h-[200px] sm:w-[300px] sm:h-[300px] border border-indigo-400/30 rounded-full animate-[spin_40s_linear_infinite_reverse] border-dotted"></div>
+                </div>
+
+                <div className="relative flex items-center justify-center mb-8 w-full max-w-[320px]">
+                  {/* SVG Круг */}
+                  <svg viewBox="0 0 320 320" className="w-full h-full transform -rotate-90 filter drop-shadow-[0_0_15px_rgba(99,102,241,0.3)]">
+                    <circle cx="160" cy="160" r={timerRadius} stroke="currentColor" strokeWidth="8" fill="transparent" 
+                      className="text-slate-200 dark:text-slate-700/50"
+                    />
+                    <circle 
+                      cx="160" cy="160" r={timerRadius} stroke="currentColor" strokeWidth="8" fill="transparent"
+                      strokeDasharray={timerCircumference} 
+                      strokeDashoffset={timerState === 'idle' ? 0 : timerOffset}
+                      className={`${timerState === 'rest' ? 'text-emerald-500' : 'text-indigo-500'} transition-all duration-1000 ease-linear`} 
+                      strokeLinecap="round" 
+                    />
+                  </svg>
+                  
+                  {/* Текст внутри круга (сделан чуть адаптивнее для сильного сжатия) */}
+                  <div className="absolute flex flex-col items-center justify-center z-10">
+                    <span className="text-4xl sm:text-5xl md:text-6xl font-black text-slate-800 dark:text-white tracking-tighter">
+                      {timerState === 'idle' ? formatTimerDisplay((Number(timerSettings.workMinutes) || 0) * 60) : formatTimerDisplay(timeLeft)}
+                    </span>
+                    <span className={`mt-2 text-xs sm:text-sm font-bold uppercase tracking-widest px-3 py-1 rounded-full ${
+                      timerState === 'work' ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-500/20 dark:text-indigo-400' : 
+                      timerState === 'rest' ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400' : 
+                      'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400'
+                    }`}>
+                      {timerState === 'idle' ? 'Ожидание' : timerState === 'work' ? 'Фокус' : 'Отдых'}
+                    </span>
+                    {(timerState === 'work' || timerState === 'rest') && (
+                       <span className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-tight">Цикл {currentCycle} / {timerSettings.cycles}</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Кнопки управления */}
+                <div className="flex space-x-6 z-10">
+                  <button 
+                    onClick={toggleTimer} 
+                    disabled={timerState === 'idle' && !isTimerValid}
+                    className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center transition-transform ${
+                      (timerState === 'idle' && !isTimerValid)
+                      ? 'bg-slate-100 text-slate-300 dark:bg-slate-800/50 dark:text-slate-600 cursor-not-allowed shadow-none'
+                      : timerActive 
+                        ? 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400 shadow-lg hover:scale-105 active:scale-95' 
+                        : 'bg-indigo-500 text-white hover:bg-indigo-600 drop-shadow-[0_0_15px_rgba(99,102,241,0.5)] shadow-lg hover:scale-105 active:scale-95'
+                  }`}>
+                    {timerActive ? (
+                      <svg className="w-7 h-7 sm:w-8 sm:h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                    ) : (
+                      <svg className="w-7 h-7 sm:w-8 sm:h-8 ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    )}
                   </button>
-                  <span className="text-lg font-semibold text-slate-700 dark:text-slate-200 w-32 text-center capitalize">
-                    {calendarMonth.toLocaleString('ru-RU', { month: 'long', year: 'numeric' })}
-                  </span>
-                  <button onClick={() => changeMonth(1)} className="p-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-xl transition-colors text-slate-600 dark:text-slate-300">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/></svg>
+                  
+                  <button onClick={stopTimer} disabled={timerState === 'idle'} className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center transition-all ${
+                    timerState === 'idle' ? 'bg-slate-100 text-slate-300 dark:bg-slate-800/50 dark:text-slate-600 cursor-not-allowed' : 'bg-red-100 text-red-500 hover:bg-red-200 dark:bg-red-500/20 dark:hover:bg-red-500/30'
+                  }`}>
+                    <svg className="w-7 h-7 sm:w-8 sm:h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
                   </button>
                 </div>
               </div>
-              
-              <div className="grid grid-cols-7 gap-3 sm:gap-4">
-                {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(d => (
-                  <div key={d} className="text-center text-slate-400 dark:text-slate-500 font-bold mb-2">{d}</div>
-                ))}
-                {renderCalendarDays(false)}
+              {/* ПРАВАЯ ПАНЕЛЬ: Настройки */}
+              {/* Уменьшена ширина: lg:w-[300px] вместо 360px, md:w-[280px] вместо 320px. Уменьшены внутренние отступы (p-4). */}
+              <div className="w-full sm:w-[260px] md:w-[280px] lg:w-[300px] shrink-0 bg-white dark:bg-slate-800 rounded-3xl p-4 md:p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-none border border-transparent dark:border-slate-700 flex flex-col h-fit">
+                <h3 className="text-lg font-bold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+                  <span className="text-indigo-500">⚙️</span> Настройки
+                </h3>
+
+                {/* Восстановлена обертка, уменьшены отступы (space-y-3 и mb-3) */}
+                <div className={`space-y-3 mb-3 transition-opacity ${timerState !== 'idle' ? 'opacity-50 pointer-events-none' : ''}`}>
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1 block">Время фокуса (мин)</label>
+                    <input type="text" inputMode="numeric" value={timerSettings.workMinutes} onChange={(e) => handleSettingChange('workMinutes', e.target.value)} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 font-bold text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500 transition-colors"/>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1 block">Отдых</label>
+                      <input type="text" inputMode="numeric" value={timerSettings.restMinutes} onChange={(e) => handleSettingChange('restMinutes', e.target.value)} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 font-bold text-slate-700 dark:text-slate-200 outline-none focus:border-emerald-500 transition-colors"/>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1 block">Циклы</label>
+                      <input type="text" inputMode="numeric" value={timerSettings.cycles} onChange={(e) => handleSettingChange('cycles', e.target.value)} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 font-bold text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500 transition-colors"/>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Тумблер автозапуска (уменьшен размер и паддинги) */}
+                <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-900/50 p-2.5 rounded-xl border border-slate-100 dark:border-slate-700 mb-0">
+                  <div>
+                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 block">Автозапуск фаз</span>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight block">Сразу начинать следующий отсчет</span>                  </div>
+                  <button 
+                    onClick={() => setTimerSettings({...timerSettings, autoStartNextPhase: !timerSettings.autoStartNextPhase})}
+                    className={`relative inline-flex h-4 w-8 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none ${timerSettings.autoStartNextPhase ? 'bg-indigo-500' : 'bg-slate-300 dark:bg-slate-600'}`}
+                  >
+                    <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow-sm transition-transform ${timerSettings.autoStartNextPhase ? 'translate-x-4' : 'translate-x-1'}`} />
+                  </button>
+                </div>
+
+                {/* Линия (отступ my-4 вместо my-6) */}
+                <hr className="border-slate-100 dark:border-slate-700 my-3" />
+
+                {/* Умный распределитель */}
+                <div className={timerState !== 'idle' ? 'opacity-50 pointer-events-none' : ''}>
+                  <h4 className="text-[13px] font-bold text-slate-700 dark:text-slate-200 mb-2 flex items-center justify-between">
+                    Умный расчет
+                    <button 
+                      onClick={setAutoPreset}
+                      className="text-[9px] bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400 px-2 py-0.5 rounded-md hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-colors font-bold uppercase tracking-wide"
+                      title="Установить 50/10/3"
+                    >
+                      Авто
+                    </button>
+                  </h4>
+                  <div className="space-y-2 bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border border-slate-100 dark:border-slate-700/50">
+                     <div>
+                        <label className="text-xs font-medium text-slate-500 dark:text-slate-400 flex justify-between">Общее время <span>{smartCalc.totalWorkHours} ч.</span></label>                        <input type="range" min="1" max="12" value={smartCalc.totalWorkHours} onChange={(e) => setSmartCalc({...smartCalc, totalWorkHours: Number(e.target.value)})} className="w-full h-1.5 accent-indigo-500" />
+                     </div>
+                     <div>
+                        <label className="text-xs font-medium text-slate-500 dark:text-slate-400 flex justify-between">Перерывы <span>{smartCalc.restCount} шт.</span></label>                        <input type="range" min="1" max="10" value={smartCalc.restCount} onChange={(e) => setSmartCalc({...smartCalc, restCount: Number(e.target.value)})} className="w-full h-1.5 accent-emerald-500" />
+                     </div>
+                     <div>
+                        <label className="text-xs font-medium text-slate-500 dark:text-slate-400 flex justify-between">Отдых всего <span>{smartCalc.totalRestMinutes} мин.</span></label>                        <input type="range" min="10" max="120" step="5" value={smartCalc.totalRestMinutes} onChange={(e) => setSmartCalc({...smartCalc, totalRestMinutes: Number(e.target.value)})} className="w-full h-1.5 accent-emerald-500" />
+                     </div>
+                     <button onClick={applySmartCalc} className="w-full mt-1 bg-indigo-50 dark:bg-indigo-500/10 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 font-bold py-1.5 rounded-lg transition-colors text-[11px]">
+                        Применить
+                     </button>
+                  </div>
+                </div>
+
               </div>
             </div>
           )}
