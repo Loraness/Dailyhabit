@@ -8,9 +8,54 @@ use sysinfo::{ProcessExt, System, SystemExt};
 use tauri::{Manager, State};
 use tauri_plugin_autostart::MacosLauncher;
 use std::collections::{HashMap, HashSet};
+
+struct Rules {
+    browsers: Vec<(String, Vec<String>)>,
+    sites: Vec<(String, Vec<String>)>,
+    apps: Vec<(String, Vec<String>)>,
+}
+
+impl Rules {
+    fn from_json(json: &serde_json::Value) -> Self {
+        let mut browsers = Vec::new();
+        if let Some(arr) = json["browsers"].as_array() {
+            for b in arr {
+                let name = b["name"].as_str().unwrap_or("Browser").to_string();
+                let matches = b["matches"].as_array().map(|m| {
+                    m.iter().filter_map(|s| s.as_str().map(|v| v.to_lowercase())).collect()
+                }).unwrap_or_default();
+                browsers.push((name, matches));
+            }
+        }
+
+        let mut sites = Vec::new();
+        if let Some(arr) = json["sites"].as_array() {
+            for s in arr {
+                let name = s["name"].as_str().unwrap_or("Unknown Site").to_string();
+                let matches = s["matches"].as_array().map(|m| {
+                    m.iter().filter_map(|s| s.as_str().map(|v| v.to_lowercase())).collect()
+                }).unwrap_or_default();
+                sites.push((name, matches));
+            }
+        }
+
+        let mut apps = Vec::new();
+        if let Some(arr) = json["apps"].as_array() {
+            for a in arr {
+                let name = a["name"].as_str().unwrap_or("Unknown App").to_string();
+                let matches = a["matches"].as_array().map(|m| {
+                    m.iter().filter_map(|s| s.as_str().map(|v| v.to_lowercase())).collect()
+                }).unwrap_or_default();
+                apps.push((name, matches));
+            }
+        }
+
+        Rules { browsers, sites, apps }
+    }
+}
+
 struct AppState {
     conn: Arc<Mutex<Connection>>,
-    // Добавляем ссылку на наш кэш в памяти
     cache: Arc<Mutex<HashMap<String, (i32, i32)>>>,
 }
 
@@ -45,54 +90,29 @@ fn is_system_process(name: &str) -> bool {
     if lower_name.contains("windowsshellexperience")
         || lower_name.contains("shell experience")
         || lower_name.contains("searchapplication")
+        || lower_name.contains("setup")
+        || lower_name.contains("uninstall")
     {
         return true;
     }
-    let exact_matches = [
-        "svchost.exe",
-        "dllhost.exe",
-        "sihost.exe",
-        "taskhostw.exe",
-        "explorer.exe",
-        "searchapp.exe",
-        "startmenuexperiencehost.exe",
-        "csrss.exe",
-        "smss.exe",
-        "wininit.exe",
-        "services.exe",
-        "lsass.exe",
-        "winlogon.exe",
-        "fontdrvhost.exe",
-        "dwm.exe",
-        "spoolsv.exe",
-        "memory compression",
-        "system idle process",
-        "system",
-        "registry",
-        "conhost.exe",
-        "runtimebroker.exe",
-        "aggregatorhost.exe",
-        "applemobiledeviceservice.exe",
-        "applicationframehost.exe",
-        "searchindexer.exe",
-        "ctfmon.exe",
-        "smartscreen.exe",
-        "securityhealthservice.exe",
-        "usocoreworker.exe",
-        "unknown",
-        "screenclippinghost.exe",
-        "winws.exe",
-        "searchhost.exe",
+    
+    let base_name = lower_name.trim_end_matches(".exe");
+    let exact_matches_bases = [
+        "svchost", "dllhost", "sihost", "taskhostw", "explorer", "searchapp", 
+        "startmenuexperiencehost", "csrss", "smss", "wininit", "services", "lsass", 
+        "winlogon", "fontdrvhost", "dwm", "spoolsv", "memory compression", 
+        "system idle process", "system", "registry", "conhost", "runtimebroker", 
+        "aggregatorhost", "applemobiledeviceservice", "applicationframehost", 
+        "searchindexer", "ctfmon", "smartscreen", "securityhealthservice", "usocoreworker", 
+        "unknown", "screenclippinghost", "winws", "searchhost", "searchfilterhost", 
+        "taskmgr", "wudfhost", "rtkauduservice64", "rundll32", "lockapp", 
+        "wsnativepushservice", "wstoastnotification", "updater", "msmpeng", "nisssrv"
     ];
-    for sys_app in exact_matches.iter() {
-        if lower_name == *sys_app || lower_name == sys_app.replace(".exe", "") {
-            return true;
-        }
-    }
-    false
+    
+    exact_matches_bases.contains(&base_name)
 }
 
-fn get_clean_name(app_name: &str, title: &str, rules: &serde_json::Value) -> String {
+fn get_clean_name(app_name: &str, title: &str, rules: &Rules) -> String {
     let clean_app_name: String = app_name
         .chars()
         .filter(|c| c.is_alphanumeric() || c.is_ascii_punctuation() || *c == ' ')
@@ -108,83 +128,49 @@ fn get_clean_name(app_name: &str, title: &str, rules: &serde_json::Value) -> Str
     }
 
     let mut final_name = clean_app_name.clone();
-    let mut is_browser = false;
 
-    if let Some(browsers) = rules["browsers"].as_array() {
-        for b in browsers {
-            if let Some(matches) = b["matches"].as_array() {
-                for m in matches {
-                    if lower_app.contains(m.as_str().unwrap_or("")) {
-                        is_browser = true;
-                        final_name = b["name"].as_str().unwrap_or("Browser").to_string();
-                        break;
-                    }
-                }
-            }
-            if is_browser {
-                break;
-            }
-        }
-    }
+    let browser_match = rules.browsers.iter().find(|(_, matches)| {
+        matches.iter().any(|m| lower_app.contains(m))
+    });
 
-    if is_browser && !lower_title.is_empty() {
-        let mut site_found = false;
-        if let Some(sites) = rules["sites"].as_array() {
-            for s in sites {
-                if let Some(matches) = s["matches"].as_array() {
-                    for m in matches {
-                        if lower_title.contains(m.as_str().unwrap_or("")) {
-                            final_name = s["name"].as_str().unwrap_or("Unknown Site").to_string();
-                            site_found = true;
-                            break;
-                        }
-                    }
-                }
-                if site_found {
-                    break;
-                }
+    if let Some((b_name, _)) = browser_match {
+        final_name = b_name.clone();
+        if !lower_title.is_empty() {
+            if let Some((s_name, _)) = rules.sites.iter().find(|(_, matches)| {
+                matches.iter().any(|m| lower_title.contains(m))
+            }) {
+                final_name = s_name.clone();
             }
         }
-    } else if !is_browser {
-        let mut app_found = false;
-        if let Some(apps) = rules["apps"].as_array() {
-            for a in apps {
-                if let Some(matches) = a["matches"].as_array() {
-                    for m in matches {
-                        if lower_app.contains(m.as_str().unwrap_or(""))
-                            || lower_title.contains(m.as_str().unwrap_or(""))
-                        {
-                            final_name = a["name"].as_str().unwrap_or("Unknown App").to_string();
-                            app_found = true;
-                            break;
-                        }
-                    }
-                }
-                if app_found {
-                    break;
-                }
-            }
-        }
-        if !app_found {
+    } else {
+        if let Some((a_name, _)) = rules.apps.iter().find(|(_, matches)| {
+            matches.iter().any(|m| lower_app.contains(m) || lower_title.contains(m))
+        }) {
+            final_name = a_name.clone();
+        } else {
             if lower_app.ends_with(".exe") {
                 final_name = final_name[..final_name.len() - 4].to_string();
             }
             let mut chars = final_name.chars();
-            if let Some(first_char) = chars.next() {
-                final_name = format!("{}{}", first_char.to_uppercase(), chars.as_str());
+            final_name = if let Some(first_char) = chars.next() {
+                format!("{}{}", first_char.to_uppercase(), chars.as_str())
             } else {
-                final_name = "Unknown".to_string();
-            }
+                "Unknown".to_string()
+            };
         }
     }
     final_name
 }
 
-// 1. Получение статистики за конкретный день (формат YYYY-MM-DD)
-// 1. Получение статистики за конкретный день (формат YYYY-MM-DD)
 #[tauri::command]
 fn get_stats_for_date(state: State<'_, AppState>, date: String) -> Result<Vec<AppUsage>, String> {
     let conn = state.conn.lock().unwrap();
+
+    // Get current date string from DB to check if we should add cache
+    let today: String = conn
+        .query_row("SELECT date('now', 'localtime')", [], |row| row.get(0))
+        .unwrap_or_default();
+
     let mut stmt = conn
         .prepare("SELECT app_name, active_duration, background_duration FROM daily_stats WHERE date = ?1")
         .map_err(|e| e.to_string())?;
@@ -199,36 +185,32 @@ fn get_stats_for_date(state: State<'_, AppState>, date: String) -> Result<Vec<Ap
         })
         .map_err(|e| e.to_string())?;
 
-    let mut db_apps: std::collections::HashMap<String, AppUsage> = std::collections::HashMap::new();
+    let mut db_apps: HashMap<String, AppUsage> = HashMap::new();
     for app in app_iter {
         if let Ok(a) = app {
             db_apps.insert(a.name.clone(), a);
         }
     }
 
-    // МАГИЯ ЗДЕСЬ: ДОБАВЛЯЕМ ДАННЫЕ ИЗ ОПЕРАТИВНОЙ ПАМЯТИ (КЭША)
-    let cache = state.cache.lock().unwrap();
-    for (app_name, (active_time, bg_time)) in cache.iter() {
-        if let Some(existing) = db_apps.get_mut(app_name) {
-            existing.active_duration += active_time;
-            existing.background_duration += bg_time;
-        } else {
-            db_apps.insert(app_name.clone(), AppUsage {
-                name: app_name.clone(),
-                active_duration: *active_time,
-                background_duration: *bg_time,
-            });
+    if date == today {
+        let cache = state.cache.lock().unwrap();
+        for (app_name, (active_time, bg_time)) in cache.iter() {
+            if let Some(existing) = db_apps.get_mut(app_name) {
+                existing.active_duration += active_time;
+                existing.background_duration += bg_time;
+            } else {
+                db_apps.insert(app_name.clone(), AppUsage {
+                    name: app_name.clone(),
+                    active_duration: *active_time,
+                    background_duration: *bg_time,
+                });
+            }
         }
     }
 
-    let mut usage = Vec::new();
-    for (_, v) in db_apps {
-        usage.push(v);
-    }
-    Ok(usage)
+    Ok(db_apps.into_values().collect())
 }
 
-// 2. Получение общей статистики за весь месяц для Календаря (формат YYYY-MM)
 #[tauri::command]
 fn get_month_stats(state: State<'_, AppState>, month: String) -> Result<Vec<DailyTotal>, String> {
     let conn = state.conn.lock().unwrap();
@@ -247,42 +229,33 @@ fn get_month_stats(state: State<'_, AppState>, month: String) -> Result<Vec<Dail
 
     let mut res = Vec::new();
     for item in iter {
-        res.push(item.unwrap());
+        if let Ok(i) = item {
+            res.push(i);
+        }
     }
     Ok(res)
 }
 
-// Специальная команда для принудительного показа окна
-// Специальная команда для принудительного показа окна
 #[tauri::command]
-fn show_window(app: tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        // 1. Показываем и разворачиваем из свернутого состояния
-        let _ = window.show();
-        let _ = window.unminimize();
-        
-        // 2. Жестко ставим поверх всех окон и запрашиваем фокус
-        let _ = window.set_always_on_top(true);
-        let _ = window.set_focus();
-
-        // 3. МАГИЯ ЗДЕСЬ: Ждем 400 мс в отдельном потоке, чтобы винда реально 
-        // отрисовала окно поверх игры или браузера, и только потом снимаем флаг.
-        let window_clone = window.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(400));
-            let _ = window_clone.set_always_on_top(false);
-        });
-    }
+fn show_window(window: tauri::Window) {
+    // 1. Разворачиваем окно, если оно было свернуто
+    let _ = window.unminimize();
+    // 2. Делаем окно видимым
+    let _ = window.show();
+    // 3. Пытаемся передать фокус
+    let _ = window.set_focus();
+    
+    // 4. ХАК для принудительного вывода на передний план в Windows
+    // Включаем режим "поверх всех" и сразу выключаем — это заставляет ОС выдвинуть окно вперед.
+    let _ = window.set_always_on_top(true);
+    let _ = window.set_always_on_top(false);
 }
-
-// --- КОМАНДЫ ДЛЯ ИСТОРИИ ФОКУСА ---
 
 #[tauri::command]
 fn get_focus_stats(state: State<'_, AppState>, date: String) -> Result<FocusDayData, String> {
     let conn = state.conn.lock().unwrap();
     let mut apps = Vec::new();
     
-    // Получаем приложения
     if let Ok(mut stmt) = conn.prepare("SELECT app_name, duration FROM focus_apps WHERE date = ?1") {
         if let Ok(app_iter) = stmt.query_map([&date], |row| {
             Ok(FocusApp { name: row.get(0)?, duration: row.get(1)? })
@@ -291,7 +264,6 @@ fn get_focus_stats(state: State<'_, AppState>, date: String) -> Result<FocusDayD
         }
     }
 
-    // Получаем общее время
     let mut focus_time = 0;
     let mut rest_time = 0;
     if let Ok(mut stmt_totals) = conn.prepare("SELECT focus_duration, rest_duration FROM focus_totals WHERE date = ?1") {
@@ -307,7 +279,7 @@ fn get_focus_stats(state: State<'_, AppState>, date: String) -> Result<FocusDayD
 }
 
 #[tauri::command]
-fn save_focus_stats(state: State<'_, AppState>, date: String, apps: std::collections::HashMap<String, i32>, focus_time: i32, rest_time: i32) -> Result<(), String> {
+fn save_focus_stats(state: State<'_, AppState>, date: String, apps: HashMap<String, i32>, focus_time: i32, rest_time: i32) -> Result<(), String> {
     let conn = state.conn.lock().unwrap();
     let _ = conn.execute("INSERT INTO focus_totals (date, focus_duration, rest_duration) VALUES (?1, ?2, ?3) ON CONFLICT(date) DO UPDATE SET focus_duration = ?2, rest_duration = ?3", params![&date, focus_time, rest_time]);
     
@@ -327,7 +299,7 @@ fn get_focus_month_stats(state: State<'_, AppState>, month: String) -> Result<Ve
     }).map_err(|e| e.to_string())?;
     
     let mut res = Vec::new();
-    for item in iter { res.push(item.unwrap()); }
+    for item in iter { if let Ok(i) = item { res.push(i); } }
     Ok(res)
 }
 
@@ -343,31 +315,37 @@ fn clear_focus_stats(state: State<'_, AppState>, date: String) -> Result<(), Str
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        // Инициализируем плагин одного окна
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
-                let _ = window.set_focus();
             }
         }))
-        // Инициализируем плагин автозапуска (передаем флаг --autostart)
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            // Проверяем, запущен ли апп пользователем или автозапуском
             let args: Vec<String> = std::env::args().collect();
             if !args.contains(&"--autostart".to_string()) {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                let handle = app.handle().clone();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(300));
+                    if let Some(window) = handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                    }
+                });
             }
 
             let app_data_dir = app.path().app_data_dir().unwrap();
             fs::create_dir_all(&app_data_dir).unwrap();
             let db_path = app_data_dir.join("dailyhabit.db");  
             let conn = Connection::open(db_path).unwrap();
+
+            // Включаем WAL для лучшей производительности
+            conn.execute_batch("
+                PRAGMA journal_mode = WAL;
+                PRAGMA synchronous = NORMAL;
+            ").unwrap();
 
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS daily_stats (
@@ -379,6 +357,8 @@ pub fn run() {
                 )",
                 [],
             ).unwrap();
+
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_stats(date)", []).unwrap();
 
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS focus_apps (
@@ -401,11 +381,12 @@ pub fn run() {
 
             let db_conn = Arc::new(Mutex::new(conn));
             let db_conn_for_thread = Arc::clone(&db_conn);
+            
             let rules_str = include_str!("../../src/rules.json");
-            let rules: serde_json::Value = serde_json::from_str(rules_str).unwrap();
-            let rules_for_thread = Arc::new(rules.clone());
+            let rules_json: serde_json::Value = serde_json::from_str(rules_str).unwrap();
+            let rules = Rules::from_json(&rules_json);
+            let rules_for_thread = Arc::new(rules);
 
-            // СОЗДАЕМ ОБЩИЙ КЭШ
             let app_cache = Arc::new(Mutex::new(HashMap::new()));
             let app_cache_for_thread = Arc::clone(&app_cache);
 
@@ -414,6 +395,18 @@ pub fn run() {
             thread::spawn(move || {
                 let mut sys = System::new();
                 let mut flush_counter = 0;
+                let mut name_cache: HashMap<String, String> = HashMap::new();
+                let mut known_active_apps: HashSet<String> = HashSet::new();
+
+                if let Ok(conn) = db_conn_for_thread.lock() {
+                    if let Ok(mut stmt) = conn.prepare("SELECT DISTINCT app_name FROM daily_stats WHERE active_duration > 0") {
+                        if let Ok(iter) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                            for name in iter.flatten() {
+                                known_active_apps.insert(name);
+                            }
+                        }
+                    }
+                }
 
                 loop {
                     thread::sleep(Duration::from_secs(5));
@@ -431,50 +424,59 @@ pub fn run() {
 
                     let mut running_clean_names = HashSet::new();
                     for (_pid, process) in sys.processes() {
-                        let name = process.name().to_string();
-                        if !is_system_process(&name) && !name.to_lowercase().contains("dailyhabit") {
-                            let clean = get_clean_name(&name, "", &rules_for_thread);
+                        let name = process.name();
+                        if !is_system_process(name) && !name.to_lowercase().contains("dailyhabit") {
+                            let clean = if let Some(cached) = name_cache.get(name) {
+                                cached.clone()
+                            } else {
+                                let cleaned = get_clean_name(name, "", &rules_for_thread);
+                                name_cache.insert(name.to_string(), cleaned.clone());
+                                cleaned
+                            };
                             running_clean_names.insert(clean);
                         }
                     }
 
-                    // 1. НАКАПЛИВАЕМ СТАТИСТИКУ В ОБЩЕМ КЭШЕ
+                    // Чистим кэш имен изредка
+                    if flush_counter % 120 == 0 {
+                        name_cache.clear();
+                    }
+
                     {
                         let mut cache_lock = app_cache_for_thread.lock().unwrap();
                         if !active_clean_name.is_empty() {
+                            known_active_apps.insert(active_clean_name.clone());
                             let entry = cache_lock.entry(active_clean_name.clone()).or_insert((0, 0));
-                            entry.0 += 5; // active_duration
+                            entry.0 += 5;
                         }
 
                         for app in running_clean_names {
-                            if app != active_clean_name {
+                            if app != active_clean_name && known_active_apps.contains(&app) {
                                 let entry = cache_lock.entry(app).or_insert((0, 0));
-                                entry.1 += 5; // background_duration
+                                entry.1 += 5;
                             }
                         }
-                    } // Блокировка снимается здесь, чтобы React мог в любой момент взять данные
+                    }
 
-                    // 2. СБРОС В БАЗУ ДАННЫХ РАЗ В 2 МИНУТЫ
                     if flush_counter >= 24 {
-                        let conn = db_conn_for_thread.lock().unwrap();
-                        let mut cache_lock = app_cache_for_thread.lock().unwrap();
-                        
-                        for (app_name, (active_time, bg_time)) in cache_lock.drain() {
-                            if active_time > 0 {
-                                let query = "
-                                    INSERT INTO daily_stats (date, app_name, active_duration, background_duration)
-                                    VALUES (date('now', 'localtime'), ?1, ?2, 0)
-                                    ON CONFLICT(date, app_name) DO UPDATE SET active_duration = active_duration + ?2;
-                                ";
-                                let _ = conn.execute(query, params![app_name, active_time]);
-                            }
-                            if bg_time > 0 {
-                                let query = "
-                                    UPDATE daily_stats 
-                                    SET background_duration = background_duration + ?2 
-                                    WHERE date = date('now', 'localtime') AND app_name = ?1;
-                                ";
-                                let _ = conn.execute(query, params![app_name, bg_time]);
+                        if let Ok(conn) = db_conn_for_thread.lock() {
+                            let mut cache_lock = app_cache_for_thread.lock().unwrap();
+                            
+                            for (app_name, (active_time, bg_time)) in cache_lock.drain() {
+                                if active_time > 0 {
+                                    let _ = conn.execute("
+                                        INSERT INTO daily_stats (date, app_name, active_duration, background_duration)
+                                        VALUES (date('now', 'localtime'), ?1, ?2, 0)
+                                        ON CONFLICT(date, app_name) DO UPDATE SET active_duration = active_duration + ?2;
+                                    ", params![app_name, active_time]);
+                                }
+                                if bg_time > 0 {
+                                    let _ = conn.execute("
+                                        INSERT INTO daily_stats (date, app_name, active_duration, background_duration)
+                                        VALUES (date('now', 'localtime'), ?1, 0, ?2)
+                                        ON CONFLICT(date, app_name) DO UPDATE SET background_duration = background_duration + ?2;
+                                    ", params![app_name, bg_time]);
+                                }
                             }
                         }
                         flush_counter = 0;
@@ -490,3 +492,4 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error");
 }
+

@@ -12,13 +12,14 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "dailyhabit",
         "width": 880,
         "height": 720,
         "decorations": false,
         "transparent": true,
         "shadow": false,
-        "visible": false 
+        "visible": false
       }
     ],
     "security": {
