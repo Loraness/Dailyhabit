@@ -1,18 +1,18 @@
 {
   "browsers": [
+    {"matches": ["brave"], "name": "Brave"},
     {"matches": ["chrome"], "name": "Google Chrome"},
     {"matches": ["msedge", "edge"], "name": "Microsoft Edge"},
     {"matches": ["firefox"], "name": "Firefox"},
     {"matches": ["opera", "opera_gx"], "name": "Opera"},
-    {"matches": ["yandex", "browser"], "name": "Яндекс Браузер"},
-    {"matches": ["brave"], "name": "Brave"}
+    {"matches": ["yandex", "browser"], "name": "Яндекс Браузер"}
   ],
   "sites": [
     {"matches": ["youtube", "youtu.be"], "name": "YouTube", "category": "entertainment"},
     {"matches": ["tiktok"], "name": "TikTok", "category": "entertainment"},
     {"matches": ["twitch"], "name": "Twitch", "category": "entertainment"},
     {"matches": ["netflix", "kinopoisk", "rutube"], "name": "Кино", "category": "entertainment"},
-    {"matches": ["spotify", "music.yandex"], "name": "Музыка", "category": "entertainment"},
+    {"matches": ["music.yandex"], "name": "Музыка", "category": "entertainment"},
     {"matches": ["vk.com", "вконтакте"], "name": "ВКонтакте", "category": "social"},
     {"matches": ["telegram", "web.telegram"], "name": "Telegram Web", "category": "social"},
     {"matches": ["github"], "name": "GitHub", "category": "study"},
@@ -20,12 +20,17 @@
     {"matches": ["chatgpt", "gemini", "claude"], "name": "Нейросети", "category": "study"}
   ],
   "apps": [
+    {"matches": ["zoom", "zoommtg"], "name": "Zoom", "category": "study"},
+    {"matches": ["spotify"], "name": "Spotify", "category": "entertainment"},
+    
     {"matches": ["code", "visual studio code"], "name": "VS Code", "category": "study"},
-    {"matches": ["idea", "pycharm", "webstorm", "clion", "rider", "phpstorm"], "name": "JetBrains IDE", "category": "study"},
+    {"matches": ["devenv", "visual studio"], "name": "Visual Studio", "category": "study"},
+    {"matches": ["idea", "pycharm", "webstorm", "clion", "rider", "phpstorm", "datagrip", "rubymine", "goland"], "name": "JetBrains IDE", "category": "study"},
     {"matches": ["winword", "excel", "powerpnt", "onenote", "msaccess", "microsoft word", "microsoft excel", "microsoft powerpoint"], "name": "Microsoft Office", "category": "study"},
+    {"matches": ["python", "node", "java", "ruby", "golang", "php", "wsl", "vmmem", "virtualbox", "vmware"], "name": "Виртуальная среда / Runtime", "category": "study"},
     
     {"matches": ["discord"], "name": "Discord", "category": "social"},
-    {"matches": ["telegram"], "name": "Telegram", "category": "social"},
+    {"matches": ["telegram", "tg"], "name": "Telegram", "category": "social"},
     {"matches": ["steam", "steamwebhelper"], "name": "Steam", "category": "games"},
     {"matches": ["epicgameslauncher"], "name": "Epic Games", "category": "games"},
     {"matches": ["battle.net"], "name": "Battle.net", "category": "games"},

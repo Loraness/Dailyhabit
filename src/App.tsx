@@ -76,6 +76,17 @@ const RefreshButton = ({ onRefresh, isRefreshing }: { onRefresh: () => void, isR
 // Дата по умолчанию: сегодня
 const getTodayString = () => new Date().toISOString().split('T')[0];
 
+// Форматирование времени (вынесено наружу для оптимизации)
+const formatTime = (totalSeconds: number) => {
+  if (!totalSeconds) return '0с';
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  if (h > 0) return `${h}ч ${m}м`;
+  if (m > 0) return `${m}м ${s}с`;
+  return `${s}с`;
+};
+
 function App() {
   const [appsData, setAppsData] = useState<AppUsage[]>([]);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'categories' | 'timer'>('dashboard');
@@ -92,12 +103,12 @@ function App() {
     workMinutes: number | '';
     restMinutes: number | '';
     cycles: number | '';
-    autoStartNextPhase: boolean; // <-- Новое свойство
+    autoStartNextPhase: boolean;
   }>({
     workMinutes: 50,
     restMinutes: 10,
     cycles: 3,
-    autoStartNextPhase: false // <-- По умолчанию выключено (ставится на паузу)
+    autoStartNextPhase: false
   });
 
   // Умный режим (для калькулятора)
@@ -107,28 +118,90 @@ function App() {
     restCount: 3
   });
 
-// --- ОТСЛЕЖИВАНИЕ ФОКУСА ---
+  // --- ОТСЛЕЖИВАНИЕ ФОКУСА (С ИСТОРИЕЙ) ---
   const prevStatsRef = useRef<Record<string, number>>({});
+  
+  // Текущие (сегодняшние) данные
   const [focusUsage, setFocusUsage] = useState<Record<string, number>>(() => {
-    const saved = localStorage.getItem(`focusUsage_${getTodayString()}`);
-    return saved ? JSON.parse(saved) : {};
+    try { const saved = localStorage.getItem(`focusUsage_${getTodayString()}`); return saved ? (JSON.parse(saved) || {}) : {}; } catch { return {}; }
   });
-
- // Сохраняем статистику фокуса при изменениях
- 
-  useEffect(() => {
-    localStorage.setItem(`focusUsage_${getTodayString()}`, JSON.stringify(focusUsage));
-  }, [focusUsage]); // <--- удалили getTodayString
-
-  // Общая статистика времени (фокус и отдых) за день
   const [dailyTimerStats, setDailyTimerStats] = useState<{focus: number, rest: number}>(() => {
-    const saved = localStorage.getItem(`dailyTimerStats_${getTodayString()}`);
-    return saved ? JSON.parse(saved) : { focus: 0, rest: 0 };
+    try {
+      const saved = localStorage.getItem(`dailyTimerStats_${getTodayString()}`); const parsed = saved ? JSON.parse(saved) : null;
+      return parsed && typeof parsed === 'object' ? { focus: parsed.focus || 0, rest: parsed.rest || 0 } : { focus: 0, rest: 0 };
+    } catch { return { focus: 0, rest: 0 }; }
   });
 
+  const [isFocusLoaded, setIsFocusLoaded] = useState(false); // <-- ЗАЩИТНЫЙ ЗАМОК ОТ ПЕРЕЗАПИСИ
+
+  // Исторические данные (для прошлых дней)
+  const [historyFocusUsage, setHistoryFocusUsage] = useState<Record<string, number>>({});
+  const [historyTimerStats, setHistoryTimerStats] = useState<{focus: number, rest: number}>({focus: 0, rest: 0});
+  
+  // Состояния нового календаря фокуса
+  const [selectedFocusDate, setSelectedFocusDate] = useState<string>(getTodayString());
+  const [isFocusDatePickerOpen, setIsFocusDatePickerOpen] = useState(false);
+  const [focusCalendarMonth, setFocusCalendarMonth] = useState(new Date());
+  const [focusMonthStats, setFocusMonthStats] = useState<Record<string, number>>({});
+
+  // 1. Загружаем данные из базы (и для истории, И ДЛЯ СЕГОДНЯ)
   useEffect(() => {
+    invoke('get_focus_stats', { date: selectedFocusDate }).then((res: any) => {
+      const usage: Record<string, number> = {};
+      res.apps.forEach((a: any) => usage[a.name] = a.duration);
+      
+      if (selectedFocusDate === getTodayString()) {
+        // Восстанавливаем "Сегодня" из БД, если LocalStorage подвел (сравниваем, где данных больше)
+        setFocusUsage(prev => Object.keys(prev).length > Object.keys(usage).length ? prev : usage);
+        setDailyTimerStats(prev => prev.focus > res.focus_time ? prev : { focus: res.focus_time, rest: res.rest_time });
+        setIsFocusLoaded(true); // Снимаем блокировку сохранения
+      } else {
+        setHistoryFocusUsage(usage);
+        setHistoryTimerStats({ focus: res.focus_time, rest: res.rest_time });
+      }
+    }).catch((e) => {
+      console.error(e);
+      if (selectedFocusDate === getTodayString()) setIsFocusLoaded(true);
+    });
+  }, [selectedFocusDate]);
+
+  // 2. Сохраняем локально и в БД (ТОЛЬКО ПОСЛЕ ЗАГРУЗКИ ДАННЫХ ИЗ БАЗЫ)
+  useEffect(() => {
+    if (!isFocusLoaded) return; // Блокируем пустую перезапись при старте приложения!
+    
+    localStorage.setItem(`focusUsage_${getTodayString()}`, JSON.stringify(focusUsage));
     localStorage.setItem(`dailyTimerStats_${getTodayString()}`, JSON.stringify(dailyTimerStats));
-  }, [dailyTimerStats]);
+    invoke('save_focus_stats', { date: getTodayString(), apps: focusUsage, focusTime: dailyTimerStats.focus, restTime: dailyTimerStats.rest }).catch(console.error);
+  }, [focusUsage, dailyTimerStats, isFocusLoaded]);
+
+  // 2. Загружаем историю из базы при смене даты
+  useEffect(() => {
+    if (selectedFocusDate !== getTodayString()) {
+      invoke('get_focus_stats', { date: selectedFocusDate }).then((res: any) => {
+        const usage: Record<string, number> = {};
+        res.apps.forEach((a: any) => usage[a.name] = a.duration);
+        setHistoryFocusUsage(usage);
+        setHistoryTimerStats({ focus: res.focus_time, rest: res.rest_time });
+      }).catch(console.error);
+    }
+  }, [selectedFocusDate]);
+
+  // 3. Загружаем данные для календаря фокуса
+  useEffect(() => {
+    if (isFocusDatePickerOpen) {
+      const y = focusCalendarMonth.getFullYear();
+      const m = String(focusCalendarMonth.getMonth() + 1).padStart(2, '0');
+      invoke('get_focus_month_stats', { month: `${y}-${m}` }).then((data: any) => {
+        const map: Record<string, number> = {};
+        data.forEach((d: any) => { map[d.date] = d.total_active; });
+        setFocusMonthStats(map);
+      }).catch(console.error);
+    }
+  }, [focusCalendarMonth, isFocusDatePickerOpen]);
+
+  // Определяем, какие данные показывать на экране
+  const displayFocusUsage = selectedFocusDate === getTodayString() ? focusUsage : historyFocusUsage;
+  const displayTimerStats = selectedFocusDate === getTodayString() ? dailyTimerStats : historyTimerStats;
   const [viewMode, setViewMode] = useState<'active' | 'background'>('active');
   const [showAllApps, setShowAllApps] = useState(false);
   const [chartLimit, setChartLimit] = useState<5 | 10>(5);
@@ -137,17 +210,26 @@ function App() {
     const saved = localStorage.getItem('customAppColors');
     return saved ? JSON.parse(saved) : {};
   });
+
   const [colorPanel, setColorPanel] = useState<{ visible: boolean, appName: string } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [autoStartEnabled, setAutoStartEnabled] = useState(true);
-// Состояние функции "Поверх окон"
-  const [bringToFrontEnabled, setBringToFrontEnabled] = useState(() => localStorage.getItem('bringToFront') === 'true');
 
+  // Состояние функции "Поверх окон" (ИСПРАВЛЕНО СОХРАНЕНИЕ)
+  const [bringToFrontEnabled, setBringToFrontEnabled] = useState(() => {
+    const saved = localStorage.getItem('bringToFront');
+    return saved !== null ? saved === 'true' : false;
+  });
+
+  // Железное сохранение при любом изменении
   useEffect(() => {
-    localStorage.setItem('bringToFront', bringToFrontEnabled.toString());
+    localStorage.setItem('bringToFront', bringToFrontEnabled ? 'true' : 'false');
   }, [bringToFrontEnabled]);
-  // Эффект для проверки статуса автозапуска
+
+
+
+// Эффект для проверки статуса автозапуска
   useEffect(() => {
     const checkAutostart = async () => {
       try {
@@ -217,29 +299,64 @@ function App() {
 
 
   useEffect(() => { fetchData(); }, [fetchData]);
-  // --- ЛОГИКА ТАЙМЕРА ---
+ // --- ЛОГИКА ТАЙМЕРА (УМНЫЙ РЕЖИМ БЕЗ РЕНДЕРОВ В ФОНЕ) ---
+  const isWindowFocusedRef = useRef(true);
+  const expectedEndTime = useRef(0);
+
+  // 1. Отслеживание фокуса для экономии CPU
+  useEffect(() => {
+    const handleFocus = () => {
+      isWindowFocusedRef.current = true;
+      if (expectedEndTime.current > 0) {
+        const remaining = Math.max(0, Math.round((expectedEndTime.current - Date.now()) / 1000));
+        setTimeLeft(remaining);
+      }
+    };
+    const handleBlur = () => {
+      isWindowFocusedRef.current = false;
+    };
+    
+    // Подключаем слушатели к окну
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    
+    // Отключаем при закрытии
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, []);
+
+  // 2. Основная логика таймера
   useEffect(() => {
     let interval: any = null;
 
-    // Функция для вывода окна на передний план
     const bringWindowToFront = async () => {
       if (!bringToFrontEnabled) return;
       try {
         await invoke('show_window');
-      } catch (e) {
-        console.error("Ошибка фокуса окна:", e);
-      }
+      } catch (e) { console.error("Ошибка фокуса окна:", e); }
     };
 
     if (timerActive && timeLeft > 0) {
-      interval = setInterval(() => setTimeLeft((t) => t - 1), 1000);
+      // Инициализируем ожидаемое время конца, только если оно сброшено (чтобы не сдвигалось каждую секунду)
+      if (expectedEndTime.current === 0) {
+        expectedEndTime.current = Date.now() + (timeLeft * 1000);
+      }
+      
+      interval = setInterval(() => {
+        if (isWindowFocusedRef.current) {
+          setTimeLeft((t) => t - 1);
+        } else {
+          // Если окно свернуто, считаем время в фоне без перерисовок всего React
+          const remaining = Math.max(0, Math.round((expectedEndTime.current - Date.now()) / 1000));
+          setTimeLeft(remaining);
+        }
+      }, 1000);
     } else if (timerActive && timeLeft === 0) {
-      // Переключение фаз, когда время вышло
+      expectedEndTime.current = 0;
       if (timerState === 'work') {
-        
-        // + ПЛЮСУЕМ ВЕСЬ ЦИКЛ ФОКУСА
         setDailyTimerStats(prev => ({ ...prev, focus: prev.focus + totalPhaseTime }));
-
         try { new Audio('/audio/end_focus.mp3').play(); } catch (e) { console.error(e); }
         bringWindowToFront(); 
 
@@ -254,10 +371,7 @@ function App() {
           setCurrentCycle(1);
         }
       } else if (timerState === 'rest') {
-        
-        // + ПЛЮСУЕМ ВЕСЬ ЦИКЛ ОТДЫХА
         setDailyTimerStats(prev => ({ ...prev, rest: prev.rest + totalPhaseTime }));
-
         try { new Audio('/audio/end_freetime.mp3').play(); } catch (e) { console.error(e); }
         bringWindowToFront(); 
 
@@ -273,20 +387,23 @@ function App() {
 
   // Эффект для отслеживания активных приложений во время фокуса (БЕЗ ИНТЕРВАЛОВ!)
   useEffect(() => {
-    if (timerState === 'work') {
+    // ДОБАВЛЕН timerActive: теперь при паузе таймера слежка тоже ставится на паузу!
+    if (timerState === 'work' && timerActive) {
       let isSnapshotReady = false;
+      let isSyncing = false; // Защита от двойного начисления при быстром переключении окон
 
-      // 1. Делаем начальный снимок перед стартом
+      // 1. Делаем начальный снимок перед стартом (или сразу после снятия с паузы)
       invoke<AppUsage[]>('get_stats_for_date', { date: getTodayString() }).then(data => {
         const initial: Record<string, number> = {};
         data.forEach(app => initial[app.name] = app.active_duration);
         prevStatsRef.current = initial;
-        isSnapshotReady = true; // Снимок готов, теперь можно считать разницу
+        isSnapshotReady = true; 
       });
 
       // Функция подсчета и сохранения разницы
       const syncFocusData = async () => {
-        if (!isSnapshotReady) return; // Защита от моментального переключения
+        if (!isSnapshotReady || isSyncing) return; // Защищаем от наложения вызовов
+        isSyncing = true;
         
         try {
           const currentData = await invoke<AppUsage[]>('get_stats_for_date', { date: getTodayString() });
@@ -309,28 +426,34 @@ function App() {
               return next;
             });
           }
-          // Безопасно обновляем снимок для следующей проверки
+          // Железно обновляем снимок для следующего шага
           prevStatsRef.current = currentObj;
-        } catch (e) { console.error("Ошибка отслеживания фокуса:", e); }
+        } catch (e) { 
+          console.error("Ошибка отслеживания фокуса:", e); 
+        } finally {
+          isSyncing = false; // Снимаем блокировку
+        }
       };
 
-      // Обновляем статистику, когда пользователь делает окно DailyHabit активным
+      // Обновляем статистику, когда пользователь делает окно активным
       const handleWindowFocus = () => syncFocusData();
       window.addEventListener('focus', handleWindowFocus);
 
-      // Cleanup: срабатывает при окончании фокуса или ручном нажатии кнопки СТОП
+      // Cleanup: срабатывает при окончании фокуса, нажатии СТОП или ПАУЗЕ
       return () => {
         window.removeEventListener('focus', handleWindowFocus);
-        syncFocusData(); // Финальная синхронизация остатков времени перед уходом на отдых
+        syncFocusData(); // Финальная синхронизация остатков
       };
     }
-  }, [timerState]);
+  }, [timerState, timerActive]); // <-- ДОБАВЛЕН timerActive В МАССИВ ЗАВИСИМОСТЕЙ
 
   const isTimerValid = timerSettings.workMinutes !== '' && timerSettings.restMinutes !== '' && timerSettings.cycles !== '';
 
   const toggleTimer = () => {
+    expectedEndTime.current = 0; // Сбрасываем кэш времени при паузе/старте
     if (timerState === 'idle') {
-      if (!isTimerValid) return; // Блокировка запуска, если что-то не заполнено
+      if (!isTimerValid) return;
+      // Блокировка запуска, если что-то не заполнено
       const work = Number(timerSettings.workMinutes);
       setTimerState('work');
       setTimeLeft(work * 60);
@@ -341,6 +464,7 @@ function App() {
   };
 
   const stopTimer = () => {
+    expectedEndTime.current = 0; // Сбрасываем кэш времени
     // Записываем то, что успели отсидеть до нажатия Стоп
     if (timerState === 'work') {
       setDailyTimerStats(prev => ({ ...prev, focus: prev.focus + (totalPhaseTime - timeLeft) }));
@@ -428,16 +552,6 @@ function App() {
 
   const getAppColor = useCallback((appName: string) => customColors[appName] || getPaletteColor(appName), [customColors]);
 
-  const formatTime = (totalSeconds: number) => {
-    if (!totalSeconds) return '0с';
-    const h = Math.floor(totalSeconds / 3600);
-    const m = Math.floor((totalSeconds % 3600) / 60);
-    const s = totalSeconds % 60;
-    if (h > 0) return `${h}ч ${m}м`;
-    if (m > 0) return `${m}м ${s}с`;
-    return `${s}с`;
-  };
-
   const processedApps = useMemo(() => {
     return appsData
       .map(app => ({ name: app.name, duration: viewMode === 'active' ? app.active_duration : app.background_duration }))
@@ -456,11 +570,11 @@ function App() {
   }, [processedApps, chartLimit]);
 
   const sortedFocusApps = useMemo(() => {
-    return Object.entries(focusUsage)
+    return Object.entries(displayFocusUsage)
       .map(([name, duration]) => ({ name, duration }))
       .filter(app => app.duration > 0)
       .sort((a, b) => b.duration - a.duration);
-  }, [focusUsage]);
+  }, [displayFocusUsage]);
 
   const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
@@ -529,35 +643,44 @@ function App() {
       const totalSecs = monthStats[dateStr] || 0;
       const isSelected = dateStr === selectedDate;
       const isToday = dateStr === getTodayString();
-      
-      // Фиксированная высота вместо aspect-square (решает проблему с огромным календарем)
       const heightClass = isModal ? "min-h-[56px] sm:min-h-[64px]" : "min-h-[70px] sm:min-h-[85px]";
       const textSize = isModal ? "text-base" : "text-lg";
-      
       daysArray.push(
-        <button
-          key={i}
-          onClick={() => { 
-            setSelectedDate(dateStr); 
-            setActiveTab('dashboard'); 
-            if (isModal) setIsDatePickerOpen(false); // Закрываем модалку при выборе
-          }}
-          className={`relative w-full ${heightClass} rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-all border-2 
-            ${isSelected ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30' : 'border-transparent hover:border-slate-200 dark:hover:border-slate-600 bg-slate-50 dark:bg-slate-800/50'}
-          `}
-        >
-          <span className={`${textSize} font-bold z-10 ${isSelected ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-700 dark:text-slate-300'}`}>
-            {i}
-          </span>
-          {totalSecs > 0 && (
-            <span className={`font-semibold text-indigo-500 dark:text-indigo-400 mt-1 ${isModal ? 'text-[9px]' : 'text-[10px]'}`}>{formatTime(totalSecs)}</span>
-          )}
+        <button key={i} onClick={() => { setSelectedDate(dateStr); setActiveTab('dashboard'); if (isModal) setIsDatePickerOpen(false); }} className={`relative w-full ${heightClass} rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-all border-2 ${isSelected ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30' : 'border-transparent hover:border-slate-200 dark:hover:border-slate-600 bg-slate-50 dark:bg-slate-800/50'}`}>
+          <span className={`${textSize} font-bold z-10 ${isSelected ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-700 dark:text-slate-300'}`}>{i}</span>
+          {totalSecs > 0 && ( <span className={`font-semibold text-indigo-500 dark:text-indigo-400 mt-1 ${isModal ? 'text-[9px]' : 'text-[10px]'}`}>{formatTime(totalSecs)}</span> )}
           {isToday && <div className="absolute top-2 right-2 w-1.5 h-1.5 sm:w-2 sm:h-2 bg-emerald-500 rounded-full"></div>}
         </button>
       );
     }
     return daysArray;
   };
+
+  // --- МЕМОИЗАЦИЯ ГРАФИКОВ (ИСПРАВЛЕНИЕ ВЫЛЕТА REACT) ---
+  const memoizedPieChart = useMemo(() => (
+    <ResponsiveContainer key={`pie-${refreshKey}`} width="100%" height="100%">
+      <PieChart>
+        <Pie data={pieChartData} cx="50%" cy="50%" innerRadius={70} outerRadius={100} paddingAngle={2} dataKey="duration" stroke="none" className="cursor-pointer" onClick={(data) => { const entryData = data.payload || data; if (!entryData.isOther) setColorPanel({ visible: true, appName: entryData.name }); }}>
+          {pieChartData.map((entry: any, index) => <Cell key={`cell-${index}`} fill={entry.isOther ? OTHER_COLOR : getAppColor(entry.name)} className="hover:opacity-80 transition-opacity outline-none" />)}
+        </Pie>
+        <Tooltip content={<CustomTooltip />} />
+      </PieChart>
+    </ResponsiveContainer>
+  ), [pieChartData, refreshKey, getAppColor, isDarkMode, OTHER_COLOR]);
+
+  const memoizedBarChart = useMemo(() => (
+    <ResponsiveContainer key={`bar-${refreshKey}`} width="100%" height="100%">
+      <BarChart data={barChartData} margin={{ top: 0, right: 30, left: 0, bottom: 0 }} barSize={30}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDarkMode ? '#334155' : '#f1f5f9'} />
+        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: isDarkMode ? '#94a3b8' : '#64748b', fontSize: 12}} />
+        <YAxis hide />
+        <Tooltip cursor={{fill: 'transparent'}} content={<CustomTooltip />} />
+        <Bar dataKey="duration" radius={[6, 6, 6, 6]}>
+          {barChartData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  ), [barChartData, refreshKey, isDarkMode]);
 
 
   return (
@@ -654,19 +777,7 @@ function App() {
                   </div>
                 </div>
                 <div className="flex-1 relative">
-                  <ResponsiveContainer key={`pie-${refreshKey}`} width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={pieChartData} cx="50%" cy="50%" innerRadius={70} outerRadius={100} paddingAngle={2} dataKey="duration" stroke="none" className="cursor-pointer"
-                        onClick={(data) => {
-                          const entryData = data.payload || data;
-                          if (!entryData.isOther) setColorPanel({ visible: true, appName: entryData.name });
-                        }}
-                      >
-                        {pieChartData.map((entry: any, index) => <Cell key={`cell-${index}`} fill={entry.isOther ? OTHER_COLOR : getAppColor(entry.name)} className="hover:opacity-80 transition-opacity outline-none" />)}
-                      </Pie>
-                      <Tooltip content={<CustomTooltip />} />
-                    </PieChart>
-                  </ResponsiveContainer>
+                  {memoizedPieChart}
                 </div>
               </div>
             </div>
@@ -681,17 +792,7 @@ function App() {
                     <RefreshButton onRefresh={() => fetchData(true)} isRefreshing={isRefreshing} />
                   </div>
                   <div className="h-[250px] w-full">
-                    <ResponsiveContainer key={`bar-${refreshKey}`} width="100%" height="100%">
-                      <BarChart data={barChartData} margin={{ top: 0, right: 30, left: 0, bottom: 0 }} barSize={30}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDarkMode ? '#334155' : '#f1f5f9'} />
-                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: isDarkMode ? '#94a3b8' : '#64748b', fontSize: 12}} />
-                        <YAxis hide />
-                        <Tooltip cursor={{fill: 'transparent'}} content={<CustomTooltip />} />
-                        <Bar dataKey="duration" radius={[6, 6, 6, 6]}>
-                          {barChartData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
+                    {memoizedBarChart}
                   </div>
                 </div>
               )}
@@ -732,18 +833,14 @@ function App() {
                 
                 {/* ЛЕВАЯ ПАНЕЛЬ: Круговой Таймер */}
                 <div className="flex-1 min-w-0 w-full bg-white dark:bg-slate-800 rounded-3xl p-4 sm:p-6 lg:p-10 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-none border border-transparent dark:border-slate-700 flex flex-col items-center justify-center relative overflow-hidden min-h-[400px] sm:min-h-[450px]">
-                  
-                  <div className="absolute inset-0 opacity-20 pointer-events-none flex items-center justify-center">
-                    <div className="w-[300px] h-[300px] sm:w-[400px] sm:h-[400px] border border-indigo-500/20 rounded-full animate-[spin_60s_linear_infinite] border-dashed"></div>
-                    <div className="absolute w-[200px] h-[200px] sm:w-[300px] sm:h-[300px] border border-indigo-400/30 rounded-full animate-[spin_40s_linear_infinite_reverse] border-dotted"></div>
-                  </div>
 
                   <div className="relative flex items-center justify-center mb-8 w-full max-w-[320px]">
-                    <svg viewBox="0 0 320 320" className="w-full h-full transform -rotate-90 filter drop-shadow-[0_0_15px_rgba(99,102,241,0.3)]">
+                    {/* Сам SVG таймер (Убрали transition-all. Теперь таймер "тикает" 1 раз в секунду, не нагружая GPU) */}
+                    <svg viewBox="0 0 320 320" className="w-full h-full transform -rotate-90 relative z-10">
                       <circle cx="160" cy="160" r={timerRadius} stroke="currentColor" strokeWidth="8" fill="transparent" className="text-slate-200 dark:text-slate-700/50" />
                       <circle cx="160" cy="160" r={timerRadius} stroke="currentColor" strokeWidth="8" fill="transparent"
                         strokeDasharray={timerCircumference} strokeDashoffset={timerState === 'idle' ? 0 : timerOffset}
-                        className={`${timerState === 'rest' ? 'text-emerald-500' : 'text-indigo-500'} transition-all duration-1000 ease-linear`} strokeLinecap="round" 
+                        className={timerState === 'rest' ? 'text-emerald-500' : 'text-indigo-500'} strokeLinecap="round" 
                       />
                     </svg>
                     <div className="absolute flex flex-col items-center justify-center z-10">
@@ -761,7 +858,7 @@ function App() {
 
                   <div className="flex space-x-6 z-10">
                     <button onClick={toggleTimer} disabled={timerState === 'idle' && !isTimerValid}
-                      className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center transition-transform ${(timerState === 'idle' && !isTimerValid) ? 'bg-slate-100 text-slate-300 dark:bg-slate-800/50 dark:text-slate-600 cursor-not-allowed shadow-none' : timerActive ? 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400 shadow-lg hover:scale-105 active:scale-95' : 'bg-indigo-500 text-white hover:bg-indigo-600 drop-shadow-[0_0_15px_rgba(99,102,241,0.5)] shadow-lg hover:scale-105 active:scale-95'}`}>
+                      className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center transition-transform ${(timerState === 'idle' && !isTimerValid) ? 'bg-slate-100 text-slate-300 dark:bg-slate-800/50 dark:text-slate-600 cursor-not-allowed shadow-none' : timerActive ? 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400 hover:scale-105 active:scale-95' : 'bg-indigo-500 text-white hover:bg-indigo-600 hover:scale-105 active:scale-95'}`}>
                       {timerActive ? (<svg className="w-7 h-7 sm:w-8 sm:h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>) : (<svg className="w-7 h-7 sm:w-8 sm:h-8 ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>)}
                     </button>
                     <button onClick={stopTimer} disabled={timerState === 'idle'} className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center transition-all ${timerState === 'idle' ? 'bg-slate-100 text-slate-300 dark:bg-slate-800/50 dark:text-slate-600 cursor-not-allowed' : 'bg-red-100 text-red-500 hover:bg-red-200 dark:bg-red-500/20 dark:hover:bg-red-500/30'}`}>
@@ -819,19 +916,29 @@ function App() {
               {/* НИЖНИЙ БЛОК: Статистика фокуса */}
               <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-none border border-transparent dark:border-slate-700">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
-                  <h3 className="text-lg font-bold text-slate-700 dark:text-slate-200 flex items-center flex-wrap gap-2">
-                    <span className="text-indigo-500">🎯</span> Куда ушло время фокуса
+                  <div className="flex items-center flex-wrap gap-3">
+                    <h3 className="text-lg font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2">
+                      <span className="text-indigo-500">🎯</span> Куда ушло время фокуса
+                    </h3>
                     
-                    {/* Плашка с общим временем фокуса и отдыха */}
-                    <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-700/50 px-2.5 py-1 rounded-md sm:ml-2 flex items-center gap-2 uppercase tracking-wide">
-                      <span className="text-indigo-600 dark:text-indigo-400">{formatTime(dailyTimerStats.focus)} фокуса</span>
-                      <span className="text-slate-300 dark:text-slate-600">|</span>
-                      <span className="text-emerald-600 dark:text-emerald-400">{formatTime(dailyTimerStats.rest)} отдыха</span>
-                    </span>
-                  </h3>
+                    {/* НОВАЯ КНОПКА ВЫБОРА ДАТЫ ДЛЯ ФОКУСА */}
+                    <button 
+                      onClick={() => setIsFocusDatePickerOpen(true)}
+                      className="flex items-center gap-2 bg-white dark:bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-500 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all text-xs font-bold text-slate-600 dark:text-slate-300 shadow-sm"
+                    >
+                      <span>📅</span>
+                      <span>{selectedFocusDate === getTodayString() ? 'Сегодня' : selectedFocusDate.split('-').reverse().join('.')}</span>
+                    </button>
 
-                  {/* Кнопка теперь заодно очищает и счетчик времени */}
-                  {(sortedFocusApps.length > 0 || dailyTimerStats.focus > 0 || dailyTimerStats.rest > 0) && (
+                    <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-700/50 px-2.5 py-1 rounded-md flex items-center gap-2 uppercase tracking-wide">
+                      <span className="text-indigo-600 dark:text-indigo-400">{formatTime(displayTimerStats.focus)} фокуса</span>
+                      <span className="text-slate-300 dark:text-slate-600">|</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">{formatTime(displayTimerStats.rest)} отдыха</span>
+                    </span>
+                  </div>
+
+                  {/* Кнопка очистки */}
+                  {(sortedFocusApps.length > 0 || displayTimerStats.focus > 0 || displayTimerStats.rest > 0) && (
                     <button onClick={() => setIsClearConfirmOpen(true)} className="text-xs font-bold text-slate-400 hover:text-red-500 transition-colors uppercase tracking-wider shrink-0">
                       Очистить
                     </button>
@@ -977,12 +1084,20 @@ function App() {
                     Отмена
                   </button>
                   <button onClick={() => {
-                    setFocusUsage({});
-                    setDailyTimerStats({ focus: 0, rest: 0 });
+                    if (selectedFocusDate === getTodayString()) {
+                      setFocusUsage({});
+                      setDailyTimerStats({ focus: 0, rest: 0 });
+                    } else {
+                      setHistoryFocusUsage({});
+                      setHistoryTimerStats({ focus: 0, rest: 0 });
+                    }
+                    invoke('clear_focus_stats', { date: selectedFocusDate }).catch(console.error);
                     setIsClearConfirmOpen(false);
                   }} className="flex-1 py-3 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 drop-shadow-md transition-colors">
                     Очистить
                   </button>
+
+                  
                 </div>
               </div>
             </div>
@@ -1005,7 +1120,56 @@ function App() {
               </div>
             </div>
           )}
+        {/* НОВОЕ МОДАЛЬНОЕ ОКНО ДЛЯ ВЫБОРА ДАТЫ ФОКУСА */}
+          {isFocusDatePickerOpen && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/30 dark:bg-slate-900/60 backdrop-blur-sm transition-all p-4" onClick={() => setIsFocusDatePickerOpen(false)}>
+              <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-700 w-full max-w-xl animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-bold text-slate-700 dark:text-slate-200">История фокуса</h3>
+                  <button onClick={() => setIsFocusDatePickerOpen(false)} className="w-8 h-8 flex justify-center items-center rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors flex-shrink-0" title="Закрыть">✕</button>
+                </div>
+                
+                <div className="flex justify-between items-center mb-6 bg-slate-50 dark:bg-slate-900/50 p-2 rounded-2xl">
+                  <button onClick={() => setFocusCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))} className="p-2 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-xl transition-colors shadow-sm text-slate-600 dark:text-slate-300">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
+                  </button>
+                  <span className="text-lg font-semibold text-slate-700 dark:text-slate-200 capitalize">
+                    {focusCalendarMonth.toLocaleString('ru-RU', { month: 'long', year: 'numeric' })}
+                  </span>
+                  <button onClick={() => setFocusCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))} className="p-2 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-xl transition-colors shadow-sm text-slate-600 dark:text-slate-300">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/></svg>
+                  </button>
+                </div>
 
+                <div className="grid grid-cols-7 gap-2">
+                  {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(d => (
+                    <div key={d} className="text-center text-xs text-slate-400 dark:text-slate-500 font-bold mb-1">{d}</div>
+                  ))}
+                  {(() => {
+                    const year = focusCalendarMonth.getFullYear(); const month = focusCalendarMonth.getMonth();
+                    const daysInMonth = new Date(year, month + 1, 0).getDate();
+                    let firstDay = new Date(year, month, 1).getDay(); firstDay = firstDay === 0 ? 6 : firstDay - 1; 
+                    const daysArray = [];
+                    for (let i = 0; i < firstDay; i++) daysArray.push(<div key={`empty-${i}`} className="p-2" />);
+                    for (let i = 1; i <= daysInMonth; i++) {
+                      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+                      const totalSecs = focusMonthStats[dateStr] || 0;
+                      const isSelected = dateStr === selectedFocusDate;
+                      const isToday = dateStr === getTodayString();
+                      daysArray.push(
+                        <button key={i} onClick={() => { setSelectedFocusDate(dateStr); setIsFocusDatePickerOpen(false); }} className={`relative w-full min-h-[56px] sm:min-h-[64px] rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-all border-2 ${isSelected ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30' : 'border-transparent hover:border-slate-200 dark:hover:border-slate-600 bg-slate-50 dark:bg-slate-800/50'}`}>
+                          <span className={`text-base font-bold z-10 ${isSelected ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-700 dark:text-slate-300'}`}>{i}</span>
+                          {totalSecs > 0 && ( <span className="font-semibold text-indigo-500 dark:text-indigo-400 mt-1 text-[9px]">{formatTime(totalSecs)}</span> )}
+                          {isToday && <div className="absolute top-2 right-2 w-1.5 h-1.5 sm:w-2 sm:h-2 bg-emerald-500 rounded-full"></div>}
+                        </button>
+                      );
+                    }
+                    return daysArray;
+                  })()}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -7,10 +7,11 @@ use std::time::Duration;
 use sysinfo::{ProcessExt, System, SystemExt};
 use tauri::{Manager, State};
 use tauri_plugin_autostart::MacosLauncher;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 struct AppState {
     conn: Arc<Mutex<Connection>>,
-    rules: serde_json::Value,
+    // Добавляем ссылку на наш кэш в памяти
+    cache: Arc<Mutex<HashMap<String, (i32, i32)>>>,
 }
 
 #[derive(serde::Serialize)]
@@ -24,6 +25,19 @@ struct AppUsage {
 struct DailyTotal {
     date: String,
     total_active: i32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FocusApp {
+    name: String,
+    duration: i32,
+}
+
+#[derive(serde::Serialize)]
+struct FocusDayData {
+    apps: Vec<FocusApp>,
+    focus_time: i32,
+    rest_time: i32,
 }
 
 fn is_system_process(name: &str) -> bool {
@@ -167,15 +181,16 @@ fn get_clean_name(app_name: &str, title: &str, rules: &serde_json::Value) -> Str
 }
 
 // 1. Получение статистики за конкретный день (формат YYYY-MM-DD)
+// 1. Получение статистики за конкретный день (формат YYYY-MM-DD)
 #[tauri::command]
 fn get_stats_for_date(state: State<'_, AppState>, date: String) -> Result<Vec<AppUsage>, String> {
     let conn = state.conn.lock().unwrap();
     let mut stmt = conn
         .prepare("SELECT app_name, active_duration, background_duration FROM daily_stats WHERE date = ?1")
         .map_err(|e| e.to_string())?;
-
+        
     let app_iter = stmt
-        .query_map([date], |row| {
+        .query_map([&date], |row| {
             Ok(AppUsage {
                 name: row.get(0)?,
                 active_duration: row.get(1)?,
@@ -184,9 +199,31 @@ fn get_stats_for_date(state: State<'_, AppState>, date: String) -> Result<Vec<Ap
         })
         .map_err(|e| e.to_string())?;
 
-    let mut usage = Vec::new();
+    let mut db_apps: std::collections::HashMap<String, AppUsage> = std::collections::HashMap::new();
     for app in app_iter {
-        usage.push(app.unwrap());
+        if let Ok(a) = app {
+            db_apps.insert(a.name.clone(), a);
+        }
+    }
+
+    // МАГИЯ ЗДЕСЬ: ДОБАВЛЯЕМ ДАННЫЕ ИЗ ОПЕРАТИВНОЙ ПАМЯТИ (КЭША)
+    let cache = state.cache.lock().unwrap();
+    for (app_name, (active_time, bg_time)) in cache.iter() {
+        if let Some(existing) = db_apps.get_mut(app_name) {
+            existing.active_duration += active_time;
+            existing.background_duration += bg_time;
+        } else {
+            db_apps.insert(app_name.clone(), AppUsage {
+                name: app_name.clone(),
+                active_duration: *active_time,
+                background_duration: *bg_time,
+            });
+        }
+    }
+
+    let mut usage = Vec::new();
+    for (_, v) in db_apps {
+        usage.push(v);
     }
     Ok(usage)
 }
@@ -238,6 +275,70 @@ fn show_window(app: tauri::AppHandle) {
     }
 }
 
+// --- КОМАНДЫ ДЛЯ ИСТОРИИ ФОКУСА ---
+
+#[tauri::command]
+fn get_focus_stats(state: State<'_, AppState>, date: String) -> Result<FocusDayData, String> {
+    let conn = state.conn.lock().unwrap();
+    let mut apps = Vec::new();
+    
+    // Получаем приложения
+    if let Ok(mut stmt) = conn.prepare("SELECT app_name, duration FROM focus_apps WHERE date = ?1") {
+        if let Ok(app_iter) = stmt.query_map([&date], |row| {
+            Ok(FocusApp { name: row.get(0)?, duration: row.get(1)? })
+        }) {
+            for app in app_iter { if let Ok(a) = app { apps.push(a); } }
+        }
+    }
+
+    // Получаем общее время
+    let mut focus_time = 0;
+    let mut rest_time = 0;
+    if let Ok(mut stmt_totals) = conn.prepare("SELECT focus_duration, rest_duration FROM focus_totals WHERE date = ?1") {
+        if let Ok(mut totals_iter) = stmt_totals.query_map([&date], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?))) {
+            if let Some(Ok((f, r))) = totals_iter.next() {
+                focus_time = f;
+                rest_time = r;
+            }
+        }
+    }
+
+    Ok(FocusDayData { apps, focus_time, rest_time })
+}
+
+#[tauri::command]
+fn save_focus_stats(state: State<'_, AppState>, date: String, apps: std::collections::HashMap<String, i32>, focus_time: i32, rest_time: i32) -> Result<(), String> {
+    let conn = state.conn.lock().unwrap();
+    let _ = conn.execute("INSERT INTO focus_totals (date, focus_duration, rest_duration) VALUES (?1, ?2, ?3) ON CONFLICT(date) DO UPDATE SET focus_duration = ?2, rest_duration = ?3", params![&date, focus_time, rest_time]);
+    
+    for (name, duration) in apps {
+        let _ = conn.execute("INSERT INTO focus_apps (date, app_name, duration) VALUES (?1, ?2, ?3) ON CONFLICT(date, app_name) DO UPDATE SET duration = ?3", params![&date, name, duration]);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_focus_month_stats(state: State<'_, AppState>, month: String) -> Result<Vec<DailyTotal>, String> {
+    let conn = state.conn.lock().unwrap();
+    let query = "SELECT date, focus_duration FROM focus_totals WHERE date LIKE ?1";
+    let mut stmt = conn.prepare(query).map_err(|e| e.to_string())?;
+    let iter = stmt.query_map([format!("{}%", month)], |row| {
+        Ok(DailyTotal { date: row.get(0)?, total_active: row.get(1)? })
+    }).map_err(|e| e.to_string())?;
+    
+    let mut res = Vec::new();
+    for item in iter { res.push(item.unwrap()); }
+    Ok(res)
+}
+
+#[tauri::command]
+fn clear_focus_stats(state: State<'_, AppState>, date: String) -> Result<(), String> {
+    let conn = state.conn.lock().unwrap();
+    let _ = conn.execute("DELETE FROM focus_apps WHERE date = ?1", params![&date]);
+    let _ = conn.execute("DELETE FROM focus_totals WHERE date = ?1", params![&date]);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -264,10 +365,10 @@ pub fn run() {
             }
 
             let app_data_dir = app.path().app_data_dir().unwrap();
-
             fs::create_dir_all(&app_data_dir).unwrap();
             let db_path = app_data_dir.join("dailyhabit.db");  
             let conn = Connection::open(db_path).unwrap();
+
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS daily_stats (
                     date TEXT NOT NULL,
@@ -279,19 +380,45 @@ pub fn run() {
                 [],
             ).unwrap();
 
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS focus_apps (
+                    date TEXT NOT NULL,
+                    app_name TEXT NOT NULL,
+                    duration INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(date, app_name)
+                )",
+                [],
+            ).unwrap();
+
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS focus_totals (
+                    date TEXT NOT NULL UNIQUE,
+                    focus_duration INTEGER NOT NULL DEFAULT 0,
+                    rest_duration INTEGER NOT NULL DEFAULT 0
+                )",
+                [],
+            ).unwrap();
+
             let db_conn = Arc::new(Mutex::new(conn));
             let db_conn_for_thread = Arc::clone(&db_conn);
             let rules_str = include_str!("../../src/rules.json");
             let rules: serde_json::Value = serde_json::from_str(rules_str).unwrap();
             let rules_for_thread = Arc::new(rules.clone());
 
-            app.manage(AppState { conn: db_conn, rules });
+            // СОЗДАЕМ ОБЩИЙ КЭШ
+            let app_cache = Arc::new(Mutex::new(HashMap::new()));
+            let app_cache_for_thread = Arc::clone(&app_cache);
+
+            app.manage(AppState { conn: db_conn, cache: app_cache });
 
             thread::spawn(move || {
                 let mut sys = System::new();
+                let mut flush_counter = 0;
+
                 loop {
                     thread::sleep(Duration::from_secs(5));
                     sys.refresh_processes();
+                    flush_counter += 1;
 
                     let mut active_clean_name = String::new();
                     if let Ok(active_window) = get_active_window() {
@@ -311,32 +438,55 @@ pub fn run() {
                         }
                     }
 
-                    let conn = db_conn_for_thread.lock().unwrap();
-
-                    if !active_clean_name.is_empty() {
-                        let query = "
-                            INSERT INTO daily_stats (date, app_name, active_duration, background_duration)
-                            VALUES (date('now', 'localtime'), ?1, 5, 0)
-                            ON CONFLICT(date, app_name) DO UPDATE SET active_duration = active_duration + 5;
-                        ";
-                        let _ = conn.execute(query, params![active_clean_name]);
-                    }
-
-                    for app in running_clean_names {
-                        if app != active_clean_name {
-                            let query = "
-                                UPDATE daily_stats 
-                                SET background_duration = background_duration + 5 
-                                WHERE date = date('now', 'localtime') AND app_name = ?1;
-                            ";
-                            let _ = conn.execute(query, params![app]);
+                    // 1. НАКАПЛИВАЕМ СТАТИСТИКУ В ОБЩЕМ КЭШЕ
+                    {
+                        let mut cache_lock = app_cache_for_thread.lock().unwrap();
+                        if !active_clean_name.is_empty() {
+                            let entry = cache_lock.entry(active_clean_name.clone()).or_insert((0, 0));
+                            entry.0 += 5; // active_duration
                         }
+
+                        for app in running_clean_names {
+                            if app != active_clean_name {
+                                let entry = cache_lock.entry(app).or_insert((0, 0));
+                                entry.1 += 5; // background_duration
+                            }
+                        }
+                    } // Блокировка снимается здесь, чтобы React мог в любой момент взять данные
+
+                    // 2. СБРОС В БАЗУ ДАННЫХ РАЗ В 2 МИНУТЫ
+                    if flush_counter >= 24 {
+                        let conn = db_conn_for_thread.lock().unwrap();
+                        let mut cache_lock = app_cache_for_thread.lock().unwrap();
+                        
+                        for (app_name, (active_time, bg_time)) in cache_lock.drain() {
+                            if active_time > 0 {
+                                let query = "
+                                    INSERT INTO daily_stats (date, app_name, active_duration, background_duration)
+                                    VALUES (date('now', 'localtime'), ?1, ?2, 0)
+                                    ON CONFLICT(date, app_name) DO UPDATE SET active_duration = active_duration + ?2;
+                                ";
+                                let _ = conn.execute(query, params![app_name, active_time]);
+                            }
+                            if bg_time > 0 {
+                                let query = "
+                                    UPDATE daily_stats 
+                                    SET background_duration = background_duration + ?2 
+                                    WHERE date = date('now', 'localtime') AND app_name = ?1;
+                                ";
+                                let _ = conn.execute(query, params![app_name, bg_time]);
+                            }
+                        }
+                        flush_counter = 0;
                     }
                 }
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_stats_for_date, get_month_stats, show_window])
+        .invoke_handler(tauri::generate_handler![
+            get_stats_for_date, get_month_stats, show_window,
+            get_focus_stats, save_focus_stats, get_focus_month_stats, clear_focus_stats
+        ])
         .run(tauri::generate_context!())
         .expect("error");
 }
