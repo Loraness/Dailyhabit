@@ -1,11 +1,11 @@
 {
-"version": "0.1.0",
-"notes": "First ver",
+"version": "0.2.0",
+"notes": "2-ая версия тест",
 "pub_date": "2026-05-13T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "",
-      "url": ""
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaFNjcHR1QVNrL3hVNVpjeDhubjhCeFlQam5WQ0tLUEx1ZDhsZG1KV3RVZHNwWC9OQ0Q5cExwUm1uY09oc2FoeUg2MEFyN2gweXJLTHdBeFZyNUpyUUFxZDZPRURVMGc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc4NzA0OTAzCWZpbGU6ZGFpbHloYWJpdF8wLjIuMF94NjQtc2V0dXAuZXhlCnZ0MFNIZ2FsODA0dFBjNTBEM0dUeWVINjBTUUtiWFFFdjVJMTdQZjVGWkh4bHFBV0hCWDhzVGl2MEMvNW9MT2JtclArakUwS1N0MzRJR3dXTWZMekJRPT0K",
+      "url": "https://github.com/Loraness/Dailyhabit/releases/download/v0.2.0/dailyhabit_0.2.0_x64-setup.exe"
     }
   }
 }
