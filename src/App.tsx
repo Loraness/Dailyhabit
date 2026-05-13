@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { enable, isEnabled, disable } from '@tauri-apps/plugin-autostart';
+import { check } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
 import './App.css';
 
 import { AppUsage, DailyTimerStats, TimerSettings } from './types';
@@ -80,8 +82,6 @@ function App() {
     totalRestMinutes: 40,
     restCount: 3
   });
-
-  const prevStatsRef = useRef<Record<string, number>>({});
   
   const [focusUsage, setFocusUsage] = useState<Record<string, number>>(() => {
     try { const saved = localStorage.getItem(`focusUsage_${getTodayString()}`); return saved ? (JSON.parse(saved) || {}) : {}; } catch { return {}; }
@@ -120,12 +120,7 @@ function App() {
     });
   }, [selectedFocusDate]);
 
-  useEffect(() => {
-    if (!isFocusLoaded) return;
-    localStorage.setItem(`focusUsage_${getTodayString()}`, JSON.stringify(focusUsage));
-    localStorage.setItem(`dailyTimerStats_${getTodayString()}`, JSON.stringify(dailyTimerStats));
-    invoke('save_focus_stats', { date: getTodayString(), apps: focusUsage, focusTime: dailyTimerStats.focus, restTime: dailyTimerStats.rest }).catch(console.error);
-  }, [focusUsage, dailyTimerStats, isFocusLoaded]);
+
 
   useEffect(() => {
     if (isFocusDatePickerOpen) {
@@ -138,6 +133,25 @@ function App() {
       }).catch(console.error);
     }
   }, [focusCalendarMonth, isFocusDatePickerOpen]);
+
+  useEffect(() => {
+    const checkForUpdates = async () => {
+      try {
+        const update = await check();
+        if (update) {
+          const yes = window.confirm(`Доступно обновление до версии ${update.version}!\n\nЧто нового:\n${update.body}\n\nУстановить сейчас?`);
+          if (yes) {
+            await update.downloadAndInstall();
+            await relaunch();
+          }
+        }
+      } catch (e) {
+        console.error('Ошибка проверки обновлений:', e);
+      }
+    };
+    // Откладываем проверку на 3 секунды, чтобы не тормозить запуск
+    setTimeout(checkForUpdates, 3000);
+  }, []);
 
   const displayFocusUsage = selectedFocusDate === getTodayString() ? focusUsage : historyFocusUsage;
   const displayTimerStats = selectedFocusDate === getTodayString() ? dailyTimerStats : historyTimerStats;
@@ -289,46 +303,23 @@ function App() {
   }, [timerActive, timeLeft, timerState, currentCycle, timerSettings, bringToFrontEnabled, totalPhaseTime]);
 
   useEffect(() => {
-    if (timerState === 'work' && timerActive) {
-      let isSnapshotReady = false;
-      let isSyncing = false;
-
-      invoke<AppUsage[]>('get_stats_for_date', { date: getTodayString() }).then(data => {
-        const initial: Record<string, number> = {};
-        data.forEach(app => initial[app.name] = app.active_duration);
-        prevStatsRef.current = initial;
-        isSnapshotReady = true; 
-      });
-
-      const syncFocusData = async () => {
-        if (!isSnapshotReady || isSyncing) return;
-        isSyncing = true;
-        try {
-          const currentData = await invoke<AppUsage[]>('get_stats_for_date', { date: getTodayString() });
-          const diffs: Record<string, number> = {};
-          const currentObj: Record<string, number> = {};
-          currentData.forEach(app => {
-            currentObj[app.name] = app.active_duration;
-            const prevVal = prevStatsRef.current[app.name] ?? 0;
-            const diff = app.active_duration - prevVal;
-            if (diff > 0) diffs[app.name] = diff;
-          });
-          if (Object.keys(diffs).length > 0) {
-            setFocusUsage(prev => {
-              const next = { ...prev };
-              for (const [name, diff] of Object.entries(diffs)) { next[name] = (next[name] || 0) + diff; }
-              return next;
-            });
-          }
-          prevStatsRef.current = currentObj;
-        } catch (e) { console.error("Ошибка отслеживания фокуса:", e); } finally { isSyncing = false; }
-      };
-
-      const handleWindowFocus = () => syncFocusData();
-      window.addEventListener('focus', handleWindowFocus);
-      return () => { window.removeEventListener('focus', handleWindowFocus); syncFocusData(); };
+    let stateCode = 0;
+    if (timerActive) {
+      if (timerState === 'work') stateCode = 1;
+      else if (timerState === 'rest') stateCode = 2;
     }
-  }, [timerState, timerActive]);
+    invoke('set_timer_state', { timerState: stateCode }).catch(console.error);
+
+    if (timerState === 'idle' && !timerActive && isFocusLoaded) {
+      // Подтягиваем свежую статистику фокуса с бэкенда, чтобы обновить UI
+      invoke('get_focus_stats', { date: getTodayString() }).then((res: any) => {
+        const usage: Record<string, number> = {};
+        res.apps.forEach((a: any) => usage[a.name] = a.duration);
+        setFocusUsage(usage);
+        setDailyTimerStats({ focus: res.focus_time, rest: res.rest_time });
+      }).catch(console.error);
+    }
+  }, [timerState, timerActive, isFocusLoaded]);
 
   const toggleTimer = useCallback(() => {
     expectedEndTime.current = 0;

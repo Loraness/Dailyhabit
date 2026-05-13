@@ -26,7 +26,9 @@ active-win-pos-rs = "0.8.3"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 sysinfo = "0.29.11" 
 tauri-plugin-notification = "2"
+tauri-plugin-process = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
