@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { check, Update } from '@tauri-apps/plugin-updater';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -14,12 +15,57 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen, setIsOpen, autoStartEnabled, toggleAutoStart,
   bringToFrontEnabled, setBringToFrontEnabled
 }) => {
+  const [isChecking, setIsChecking] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<Update | null>(null);
+  const [updateMessage, setUpdateMessage] = useState<string>('');
+
   if (!isOpen) return null;
+
+  const handleCheckUpdate = async () => {
+    setIsChecking(true);
+    setUpdateMessage('');
+    try {
+      const update = await check();
+      if (update) {
+        setUpdateInfo(update);
+      } else {
+        setUpdateMessage('У вас установлена последняя версия.');
+      }
+    } catch (error) {
+      console.error(error);
+      setUpdateMessage('Ошибка при проверке обновлений.');
+    } finally {
+      setIsChecking(false);
+    }
+  };
+
+  const renderUpdateNotes = (body: string | undefined) => {
+    if (!body) return null;
+    
+    const lines = body.split('\n');
+    return (
+      <div className="text-sm text-slate-600 dark:text-slate-300 space-y-2 mt-2 max-h-40 overflow-y-auto pr-2">
+        {lines.map((line, i) => {
+          if (line.trim().startsWith('-') || line.trim().startsWith('*')) {
+            return (
+              <li key={i} className="ml-4 list-disc marker:text-indigo-500">
+                {line.substring(1).trim()}
+              </li>
+            );
+          }
+          if (line.trim().startsWith('#')) {
+             return <h4 key={i} className="font-bold text-slate-800 dark:text-slate-100 mt-2">{line.replace(/^#+\s/, '')}</h4>;
+          }
+          return <p key={i}>{line}</p>;
+        })}
+      </div>
+    );
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 dark:bg-slate-900/60 backdrop-blur-sm transition-all p-4" onClick={() => setIsOpen(false)}>
-      <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-700 w-full max-w-md animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
-        <div className="flex justify-between items-center mb-6">
+      <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-700 w-full max-w-md animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        <div className="flex justify-between items-center mb-6 shrink-0">
           <h3 className="text-xl font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2">
             <svg className="w-6 h-6 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
             Настройки
@@ -27,7 +73,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
           <button onClick={() => setIsOpen(false)} className="w-8 h-8 flex justify-center items-center rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors shrink-0" title="Закрыть">✕</button>
         </div>
         
-        <div className="space-y-4">
+        <div className="space-y-4 overflow-y-auto pr-1 pb-2 flex-grow custom-scrollbar">
           <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-700">
             <div className="pr-4">
               <h4 className="font-semibold text-slate-700 dark:text-slate-200">Запускать по умолчанию</h4>
@@ -53,8 +99,82 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
               <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${bringToFrontEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
             </button>
           </div>
+          
+          <div className="p-4 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-700">
+            <h4 className="font-semibold text-slate-700 dark:text-slate-200 mb-2">Обновления</h4>
+            
+            {updateInfo ? (
+              <div className="bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-100 dark:border-indigo-500/20 rounded-xl p-3 mb-3">
+                <h5 className="font-bold text-indigo-700 dark:text-indigo-300 flex items-center gap-2">
+                  <span>🚀 Доступна версия {updateInfo.version}</span>
+                </h5>
+                <div className="mt-2 text-sm">
+                  {renderUpdateNotes(updateInfo.body)}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <button 
+                    onClick={async () => {
+                      setUpdateMessage('Скачивание и установка...');
+                      try {
+                        let downloaded = 0;
+                        let contentLength = 0;
+                        await updateInfo.downloadAndInstall((event) => {
+                          switch (event.event) {
+                            case 'Started':
+                              contentLength = event.data.contentLength || 0;
+                              setUpdateMessage(`Загрузка начата...`);
+                              break;
+                            case 'Progress':
+                              downloaded += event.data.chunkLength;
+                              if (contentLength) {
+                                setUpdateMessage(`Загружено ${Math.round((downloaded / contentLength) * 100)}%`);
+                              } else {
+                                setUpdateMessage(`Загружено ${Math.round(downloaded / 1024 / 1024)} МБ`);
+                              }
+                              break;
+                            case 'Finished':
+                              setUpdateMessage('Установка завершена. Перезапуск...');
+                              break;
+                          }
+                        });
+                      } catch (e) {
+                        console.error(e);
+                        setUpdateMessage('Ошибка при обновлении.');
+                      }
+                    }}
+                    className="flex-1 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors"
+                  >
+                    Обновить
+                  </button>
+                  <button 
+                    onClick={() => setUpdateInfo(null)}
+                    className="flex-1 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    Отмена
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button 
+                onClick={handleCheckUpdate}
+                disabled={isChecking}
+                className="w-full py-2.5 rounded-xl font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isChecking ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    Проверка...
+                  </>
+                ) : 'Проверить обновления'}
+              </button>
+            )}
+            
+            {updateMessage && !updateInfo && (
+              <p className="text-xs text-center mt-2 text-slate-500 dark:text-slate-400">{updateMessage}</p>
+            )}
+          </div>
 
-          <div className="pt-2">
+          <div className="pt-2 shrink-0">
             <button 
               onClick={async () => {
                 try { await getCurrentWindow().close(); } catch (e) { console.error(e); }

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { enable, isEnabled, disable } from '@tauri-apps/plugin-autostart';
-import { check } from '@tauri-apps/plugin-updater';
+import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import './App.css';
 
@@ -139,11 +139,8 @@ function App() {
       try {
         const update = await check();
         if (update) {
-          const yes = window.confirm(`Доступно обновление до версии ${update.version}!\n\nЧто нового:\n${update.body}\n\nУстановить сейчас?`);
-          if (yes) {
-            await update.downloadAndInstall();
-            await relaunch();
-          }
+          setPendingUpdate(update);
+          setIsUpdateModalOpen(true);
         }
       } catch (e) {
         console.error('Ошибка проверки обновлений:', e);
@@ -207,6 +204,9 @@ function App() {
   const [monthStats, setMonthStats] = useState<Record<string, number>>({});
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+  const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
 
   const lastFetchTime = useRef(0);
 
@@ -553,6 +553,62 @@ function App() {
                 <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-700/50 p-3 rounded-2xl">
                   <span className="text-sm font-medium text-slate-600 dark:text-slate-300">Свой цвет:</span>
                   <input type="color" className="w-10 h-10 rounded-xl cursor-pointer border-0 bg-transparent p-0" value={getAppColor(colorPanel.appName)} onChange={(e) => handleColorChange(colorPanel.appName, e.target.value)} />
+                </div>
+              </div>
+            </div>
+          )}
+          {isUpdateModalOpen && pendingUpdate && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/20 dark:bg-slate-900/50 backdrop-blur-sm transition-all p-4" onClick={() => !isUpdating && setIsUpdateModalOpen(false)}>
+              <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-700 w-[85%] max-w-2xl max-h-[90vh] flex flex-col animate-in fade-in zoom-in-95 duration-300" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center space-x-4 mb-6 shrink-0">
+                  <div className="w-14 h-14 bg-indigo-100 dark:bg-indigo-500/20 text-indigo-500 rounded-2xl flex items-center justify-center text-2xl shadow-inner">
+                    ✨
+                  </div>
+                  <div>
+                    <h3 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Обновление</h3>
+                    <p className="text-indigo-500 dark:text-indigo-400 font-semibold">
+                      Версия {pendingUpdate.version}
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="bg-slate-50 dark:bg-slate-900/50 rounded-2xl p-5 mb-8 border border-slate-100 dark:border-slate-700/50 min-h-[12rem] overflow-y-auto custom-scrollbar flex-1">
+                  <h4 className="text-sm font-bold text-slate-500 dark:text-slate-400 mb-2 uppercase tracking-wider">Что нового:</h4>
+                  <div className="text-slate-700 dark:text-slate-300 text-sm leading-relaxed space-y-1">
+                    {(pendingUpdate.body || 'Нет описания.').split('\n').map((line, i) => {
+                      const trimmed = line.trim();
+                      if (trimmed.startsWith('-') || trimmed.startsWith('*')) {
+                        return <li key={i} className="ml-4 list-disc marker:text-indigo-500">{trimmed.substring(1).trim()}</li>;
+                      }
+                      if (trimmed.startsWith('#')) {
+                        return <h4 key={i} className="font-bold text-slate-800 dark:text-slate-100 mt-3 mb-1">{trimmed.replace(/^#+\s/, '')}</h4>;
+                      }
+                      return <p key={i} className={trimmed ? "" : "min-h-[1rem]"}>{line}</p>;
+                    })}
+                  </div>
+                </div>
+                
+                <div className="flex gap-3 mt-auto shrink-0">
+                  <button onClick={() => setIsUpdateModalOpen(false)} disabled={isUpdating} className="flex-1 py-3.5 rounded-xl font-bold text-slate-600 dark:text-slate-300 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 transition-colors disabled:opacity-50">
+                    Позже
+                  </button>
+                  <button 
+                    disabled={isUpdating}
+                    onClick={async () => { 
+                      setIsUpdating(true);
+                      try {
+                        await pendingUpdate.downloadAndInstall();
+                        await relaunch();
+                      } catch (e) {
+                        console.error('Ошибка установки обновления:', e);
+                        alert('Произошла ошибка при установке обновления.');
+                        setIsUpdating(false);
+                      }
+                    }} 
+                    className="flex-1 py-3.5 rounded-xl font-bold text-white bg-indigo-500 hover:bg-indigo-600 shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 transition-all transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isUpdating ? 'Установка...' : 'Установить'}
+                  </button>
                 </div>
               </div>
             </div>

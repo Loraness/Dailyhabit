@@ -361,7 +361,6 @@ fn get_focus_stats(state: State<'_, AppState>, date: String) -> Result<FocusDayD
 
 #[tauri::command]
 fn set_timer_state(state: State<'_, AppState>, timer_state: u8) -> Result<(), String> {
-    println!("[ТАЙМЕР] Состояние изменено на: {}", timer_state);
     state.timer_state.store(timer_state, Ordering::Relaxed);
     Ok(())
 }
