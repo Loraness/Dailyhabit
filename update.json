@@ -1,11 +1,11 @@
 {
-"version": "0.3.0",
-"notes": "### Что нового в версии 0.3.0:\n- Добавлено кастомное окно авто-обновлений\n- Теперь списки изменений отображаются красиво\n\nПриятного использования!",
-"pub_date": "2026-05-22T00:00:00Z",
+"version": "0.4.0",
+"notes": "### Что нового в версии 0.4.0:\n- Добавлена детализация сессий фокуса: статистика разбивается на отдельные блоки (Фокус 1, Фокус 2) при каждом запуске таймера\n- Добавлено контекстное меню для приложений (вызывается правым кликом в дашборде и категориях)\n- Появилась возможность скрывать приложения из статистики (добавлять в исключения) и полностью удалять их историю\n- Добавлена функция     кастомного переименования отслеживаемых программ\n- Улучшена скорость синхронизации данных при остановке таймера\n\nПриятного использования!",
+"pub_date": "2026-05-27T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaFNjcHR1QVNrLzFMYlE3S1VHTUlvWkJSdkE2ZVJnTnZUZi9IMUNpT1ljUVg2aUgzV1ZXcm1rY3Y1cWxxbDArMnZBeWdCY1ZYRHl6SzFtQWswbjZUUEo2OG5QTFB4MHdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5NDgyMzA5CWZpbGU6ZGFpbHloYWJpdF8wLjMuMF94NjQtc2V0dXAuZXhlCkJDSE5ocXY1cncyR0tQRFZLQzMya21DcnA3U2JBbGg2NHFRUGI1VEptcCsxSWN0aVkxb3hEZTBnUFFPZXdnSkRMbmJHLzU3bUVkait2cEdsUG10T0FnPT0K",
-      "url": "https://github.com/Loraness/Dailyhabit/releases/download/v0.3.0/dailyhabit_0.3.0_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaFNjcHR1QVNrLzhYNWxEa0o2V1FVa0FyR2dPdnFvTnYxSUdEU092TnZOY1NlTGFzNy9WdWx4SEQ5MnRQOWNHQmwzaHl3bWhJNXFKR2psU3JIRXovbjAyMDVLNW0yWXdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5OTAzOTY5CWZpbGU6ZGFpbHloYWJpdF8wLjQuMF94NjQtc2V0dXAuZXhlCjZQTHR4RDdNQXg4NktpSy9tdjc5Y1RROUF2Tkg2UlRMdjVlM21EbzNvUkhTMG5SS3RGT0R0b1NML0pFbllzY0Z4MUN3OUhyUlFoeTNFUWhoNFEwcURBPT0K",
+      "url": "https://github.com/Loraness/Dailyhabit/releases/download/v0.4.0/dailyhabit_0.4.0_x64-setup.exe"
     }
   }
 }
