@@ -8,10 +8,12 @@ interface CategoriesSectionProps {
   isRefreshing: boolean;
   memoizedBarChart: React.ReactNode;
   categorizedData: Record<string, { info: any, totalTime: number, apps: {name: string, duration: number}[] }>;
+  onAppContextMenu: (e: React.MouseEvent, appName: string) => void;
+  getAppDisplayName: (name: string) => string;
 }
 
 const CategoriesSection: React.FC<CategoriesSectionProps> = ({
-  barChartData, fetchData, isRefreshing, memoizedBarChart, categorizedData
+  barChartData, fetchData, isRefreshing, memoizedBarChart, categorizedData, onAppContextMenu, getAppDisplayName
 }) => {
   return (
     <div>
@@ -41,12 +43,19 @@ const CategoriesSection: React.FC<CategoriesSectionProps> = ({
                 </div>
               </div>
               <div className="space-y-3 flex-1 overflow-y-auto custom-scrollbar max-h-[300px] pr-2">
-                {category.apps.map((app, appIdx) => (
-                  <div key={appIdx} className="flex justify-between items-center group">
-                    <span className="font-medium text-slate-600 dark:text-slate-300 truncate mr-2 transition-colors group-hover:text-slate-900 dark:group-hover:text-white" title={app.name}>{app.name}</span>
-                    <span className="text-sm font-semibold text-slate-400 dark:text-slate-500 whitespace-nowrap bg-slate-50 dark:bg-slate-700 px-2 py-0.5 rounded-md">{formatTime(app.duration)}</span>
-                  </div>
-                ))}
+                {category.apps.map((app, appIdx) => {
+                  const displayName = getAppDisplayName(app.name);
+                  return (
+                    <div 
+                      key={appIdx} 
+                      onContextMenu={(e) => onAppContextMenu(e, app.name)}
+                      className="flex justify-between items-center group cursor-context-menu hover:bg-slate-50 dark:hover:bg-slate-700/50 p-1.5 -mx-1.5 rounded-lg transition-colors"
+                    >
+                      <span className="font-medium text-slate-600 dark:text-slate-300 truncate mr-2 transition-colors group-hover:text-slate-900 dark:group-hover:text-white" title={displayName}>{displayName}</span>
+                      <span className="text-sm font-semibold text-slate-400 dark:text-slate-500 whitespace-nowrap bg-slate-50 dark:bg-slate-700 px-2 py-0.5 rounded-md">{formatTime(app.duration)}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )

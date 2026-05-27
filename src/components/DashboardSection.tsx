@@ -14,11 +14,13 @@ interface DashboardSectionProps {
   chartLimit: 5 | 10;
   setChartLimit: (limit: 5 | 10) => void;
   memoizedPieChart: React.ReactNode;
+  onAppContextMenu: (e: React.MouseEvent, appName: string) => void;
 }
 
 const DashboardSection: React.FC<DashboardSectionProps> = ({
   processedApps, showAllApps, setShowAllApps, selectedDate, getTodayString,
-  getAppColor, fetchData, isRefreshing, chartLimit, setChartLimit, memoizedPieChart
+  getAppColor, fetchData, isRefreshing, chartLimit, setChartLimit, memoizedPieChart,
+  onAppContextMenu
 }) => {
   const displayedApps = showAllApps ? processedApps : processedApps.slice(0, 5);
 
@@ -37,7 +39,11 @@ const DashboardSection: React.FC<DashboardSectionProps> = ({
           {displayedApps.map((app, index) => {
             const appColor = getAppColor(app.name); 
             return (
-              <div key={index} className="flex justify-between items-center p-3 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-700/50 border border-transparent hover:border-slate-100 dark:hover:border-slate-600 transition-all">
+              <div 
+                key={index} 
+                onContextMenu={(e) => onAppContextMenu(e, app.name)}
+                className="flex justify-between items-center p-3 rounded-2xl hover:bg-slate-50 dark:hover:bg-slate-700/50 border border-transparent hover:border-slate-100 dark:hover:border-slate-600 transition-all cursor-context-menu"
+              >
                 <div className="flex items-center space-x-3">
                   <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm" style={{ backgroundColor: appColor }}>{index + 1}</div>
                   <span className="font-medium text-slate-700 dark:text-slate-200 truncate max-w-[200px]" title={app.name}>{app.name}</span>

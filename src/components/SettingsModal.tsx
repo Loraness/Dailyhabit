@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { invoke } from '@tauri-apps/api/core';
 import { check, Update } from '@tauri-apps/plugin-updater';
 
 interface SettingsModalProps {
@@ -9,15 +10,33 @@ interface SettingsModalProps {
   toggleAutoStart: () => void;
   bringToFrontEnabled: boolean;
   setBringToFrontEnabled: (enabled: boolean) => void;
+  ignoredApps: string[];
+  setIgnoredApps: React.Dispatch<React.SetStateAction<string[]>>;
+  getAppDisplayName: (appName: string) => string;
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen, setIsOpen, autoStartEnabled, toggleAutoStart,
-  bringToFrontEnabled, setBringToFrontEnabled
+  bringToFrontEnabled, setBringToFrontEnabled,
+  ignoredApps, setIgnoredApps, getAppDisplayName
 }) => {
   const [isChecking, setIsChecking] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<Update | null>(null);
   const [updateMessage, setUpdateMessage] = useState<string>('');
+  const [view, setView] = useState<'main' | 'ignored'>('main');
+
+  useEffect(() => {
+    if (!isOpen) setView('main');
+  }, [isOpen]);
+
+  const handleUnignore = async (appName: string) => {
+    try {
+      await invoke('unignore_app', { appName });
+      setIgnoredApps(prev => prev.filter(app => app !== appName));
+    } catch (error) {
+      console.error(error);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -62,6 +81,42 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     );
   };
 
+  if (view === 'ignored') {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 dark:bg-slate-900/60 backdrop-blur-sm transition-all p-4" onClick={() => setIsOpen(false)}>
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-700 w-full max-w-md animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center mb-6 shrink-0">
+            <button onClick={() => setView('main')} className="w-8 h-8 mr-3 flex justify-center items-center rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors shrink-0" title="Назад">←</button>
+            <h3 className="text-xl font-bold text-slate-700 dark:text-slate-200">Исключения</h3>
+            <button onClick={() => setIsOpen(false)} className="w-8 h-8 ml-auto flex justify-center items-center rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors shrink-0" title="Закрыть">✕</button>
+          </div>
+          <div className="flex-1 overflow-y-auto pr-1 pb-2 custom-scrollbar">
+            {ignoredApps.length === 0 ? (
+              <p className="text-sm text-center text-slate-500 dark:text-slate-400 py-8">Список исключений пуст.</p>
+            ) : (
+              <div className="space-y-2">
+                {ignoredApps.map(app => {
+                  const displayName = getAppDisplayName(app);
+                  return (
+                    <div key={app} className="flex justify-between items-center bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border border-slate-100 dark:border-slate-700">
+                      <span className="text-sm font-medium text-slate-700 dark:text-slate-200 truncate pr-3" title={displayName}>{displayName}</span>
+                      <button 
+                        onClick={() => handleUnignore(app)}
+                        className="text-xs font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20 transition-colors shrink-0"
+                      >
+                        Вернуть
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 dark:bg-slate-900/60 backdrop-blur-sm transition-all p-4" onClick={() => setIsOpen(false)}>
       <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-700 w-full max-w-md animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
@@ -99,6 +154,17 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
               <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${bringToFrontEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
             </button>
           </div>
+          
+          <button 
+            onClick={() => setView('ignored')}
+            className="w-full flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 transition-colors"
+          >
+            <div className="text-left">
+              <h4 className="font-semibold text-slate-700 dark:text-slate-200">Исключения отслеживания</h4>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Управление скрытыми приложениями</p>
+            </div>
+            <span className="text-slate-400">→</span>
+          </button>
           
           <div className="p-4 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-700">
             <h4 className="font-semibold text-slate-700 dark:text-slate-200 mb-2">Обновления</h4>

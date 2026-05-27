@@ -23,6 +23,8 @@ interface TimerSectionProps {
   setIsClearConfirmOpen: (open: boolean) => void;
   sortedFocusApps: FocusApp[];
   getAppColor: (name: string) => string;
+  getAppDisplayName: (name: string) => string;
+  sessions: any[];
 }
 
 const TimerSection: React.FC<TimerSectionProps> = ({
@@ -30,7 +32,7 @@ const TimerSection: React.FC<TimerSectionProps> = ({
   toggleTimer, stopTimer, handleSettingChange, setTimerSettings,
   smartCalc, setSmartCalc, applySmartCalc, setAutoPreset,
   displayTimerStats, selectedFocusDate, setIsFocusDatePickerOpen,
-  setIsClearConfirmOpen, sortedFocusApps, getAppColor
+  setIsClearConfirmOpen, sortedFocusApps, getAppColor, getAppDisplayName, sessions
 }) => {
 
   const formatTimerDisplay = (seconds: number) => {
@@ -149,6 +151,46 @@ const TimerSection: React.FC<TimerSectionProps> = ({
           )}
         </div>
 
+        {sessions && sessions.length > 0 && (
+          <div className="mb-6 space-y-4">
+            {sessions.map((session, index) => (
+              <div key={session.id} className="bg-slate-50 dark:bg-slate-900/50 rounded-2xl p-4 border border-slate-100 dark:border-slate-700">
+                <div className="flex justify-between items-center mb-3">
+                  <h4 className="text-sm font-bold text-slate-700 dark:text-slate-200">Фокус {index + 1}</h4>
+                  <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-900/30 px-2 py-0.5 rounded shadow-sm">
+                    {formatTime(session.duration)}
+                  </span>
+                </div>
+                {session.apps && session.apps.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {session.apps.sort((a: any, b: any) => b.duration - a.duration).map((app: any, idx: number) => {
+                      const appColor = getAppColor(app.name);
+                      const displayName = getAppDisplayName(app.name);
+                      return (
+                        <div key={idx} className="flex justify-between items-center p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700">
+                          <div className="flex items-center space-x-2 overflow-hidden">
+                            <div className="w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-white text-[10px] font-bold shadow-sm" style={{ backgroundColor: appColor }}>
+                              {displayName.charAt(0).toUpperCase()}
+                            </div>
+                            <span className="text-xs font-medium text-slate-700 dark:text-slate-200 truncate" title={displayName}>{displayName}</span>
+                          </div>
+                          <span className="ml-2 shrink-0 text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                            {formatTime(app.duration)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 italic">Нет данных о приложениях</p>
+                )}
+              </div>
+            ))}
+            <hr className="border-slate-100 dark:border-slate-700 my-6" />
+            <h4 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-4 px-2">Общее время за день</h4>
+          </div>
+        )}
+
         {sortedFocusApps.length === 0 ? (
           <div className="text-center py-8 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
             <span className="text-4xl mb-3 block opacity-80">👀</span>
@@ -159,13 +201,14 @@ const TimerSection: React.FC<TimerSectionProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {sortedFocusApps.map((app, idx) => {
               const appColor = getAppColor(app.name);
+              const displayName = getAppDisplayName(app.name);
               return (
                 <div key={idx} className="flex justify-between items-center p-3 rounded-2xl bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-700 hover:border-indigo-100 dark:hover:border-indigo-900/50 transition-colors">
                   <div className="flex items-center space-x-3 overflow-hidden">
                     <div className="w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm" style={{ backgroundColor: appColor }}>
-                      {app.name.charAt(0).toUpperCase()}
+                      {displayName.charAt(0).toUpperCase()}
                     </div>
-                    <span className="font-medium text-slate-700 dark:text-slate-200 truncate" title={app.name}>{app.name}</span>
+                    <span className="font-medium text-slate-700 dark:text-slate-200 truncate" title={displayName}>{displayName}</span>
                   </div>
                   <span className="ml-3 shrink-0 text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-900/30 px-2.5 py-1 rounded-lg shadow-sm">
                     {formatTime(app.duration)}

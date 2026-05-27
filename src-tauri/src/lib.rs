@@ -2,7 +2,7 @@ use active_win_pos_rs::get_active_window;
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -78,6 +78,9 @@ struct AppState {
     conn: Arc<Mutex<Connection>>,
     cache: Arc<Mutex<HashMap<String, (i32, i32)>>>,
     timer_state: Arc<AtomicU8>,
+    ignored_apps: Arc<Mutex<HashSet<String>>>,
+    force_flush: Arc<AtomicBool>,
+    current_session_id: Arc<AtomicUsize>,
 }
 
 #[derive(serde::Serialize)]
@@ -99,11 +102,19 @@ struct FocusApp {
     duration: i32,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FocusSession {
+    id: usize,
+    duration: i32,
+    apps: Vec<FocusApp>,
+}
+
 #[derive(serde::Serialize)]
 struct FocusDayData {
     apps: Vec<FocusApp>,
     focus_time: i32,
     rest_time: i32,
+    sessions: Vec<FocusSession>,
 }
 
 fn is_system_process(name: &str) -> bool {
@@ -352,16 +363,74 @@ fn get_focus_stats(state: State<'_, AppState>, date: String) -> Result<FocusDayD
         }
     }
 
+    let mut sessions = Vec::new();
+    if let Ok(mut stmt_sessions) = conn.prepare("SELECT id, duration FROM focus_sessions WHERE date = ?1 ORDER BY id ASC") {
+        if let Ok(session_iter) = stmt_sessions.query_map([&date], |row| {
+            let id: usize = row.get(0)?;
+            let duration: i32 = row.get(1)?;
+            Ok((id, duration))
+        }) {
+            for s in session_iter {
+                if let Ok((id, duration)) = s {
+                    if duration > 0 {
+                        let mut session_apps = Vec::new();
+                        if let Ok(mut stmt_apps) = conn.prepare("SELECT app_name, duration FROM focus_session_apps WHERE session_id = ?1") {
+                            if let Ok(app_iter) = stmt_apps.query_map([id], |row| {
+                                Ok(FocusApp {
+                                    name: row.get(0)?,
+                                    duration: row.get(1)?,
+                                })
+                            }) {
+                                for app in app_iter {
+                                    if let Ok(a) = app {
+                                        session_apps.push(a);
+                                    }
+                                }
+                            }
+                        }
+                        sessions.push(FocusSession {
+                            id,
+                            duration,
+                            apps: session_apps,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     Ok(FocusDayData {
         apps,
         focus_time,
         rest_time,
+        sessions,
     })
+}
+
+#[tauri::command]
+fn start_new_focus_session(state: State<'_, AppState>) -> Result<(), String> {
+    let conn = state.conn.lock().unwrap();
+    let _ = conn.execute("INSERT INTO focus_sessions (date, duration) VALUES (date('now', 'localtime'), 0)", []);
+    let id = conn.last_insert_rowid() as usize;
+    state.current_session_id.store(id, Ordering::Relaxed);
+    Ok(())
 }
 
 #[tauri::command]
 fn set_timer_state(state: State<'_, AppState>, timer_state: u8) -> Result<(), String> {
     state.timer_state.store(timer_state, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+fn flush_timer_stats(state: State<'_, AppState>) -> Result<(), String> {
+    state.force_flush.store(true, Ordering::Relaxed);
+    for _ in 0..15 {
+        if !state.force_flush.load(Ordering::Relaxed) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
     Ok(())
 }
 
@@ -411,8 +480,42 @@ fn get_focus_month_stats(
 #[tauri::command]
 fn clear_focus_stats(state: State<'_, AppState>, date: String) -> Result<(), String> {
     let conn = state.conn.lock().unwrap();
+    let _ = conn.execute("DELETE FROM focus_session_apps WHERE session_id IN (SELECT id FROM focus_sessions WHERE date = ?1)", params![&date]);
+    let _ = conn.execute("DELETE FROM focus_sessions WHERE date = ?1", params![&date]);
     let _ = conn.execute("DELETE FROM focus_apps WHERE date = ?1", params![&date]);
     let _ = conn.execute("DELETE FROM focus_totals WHERE date = ?1", params![&date]);
+    Ok(())
+}
+
+#[tauri::command]
+fn ignore_app(state: State<'_, AppState>, app_name: String) -> Result<(), String> {
+    let conn = state.conn.lock().unwrap();
+    let _ = conn.execute("INSERT OR IGNORE INTO ignored_apps (app_name) VALUES (?1)", params![&app_name]);
+    let mut ignored = state.ignored_apps.lock().unwrap();
+    ignored.insert(app_name);
+    Ok(())
+}
+
+#[tauri::command]
+fn unignore_app(state: State<'_, AppState>, app_name: String) -> Result<(), String> {
+    let conn = state.conn.lock().unwrap();
+    let _ = conn.execute("DELETE FROM ignored_apps WHERE app_name = ?1", params![&app_name]);
+    let mut ignored = state.ignored_apps.lock().unwrap();
+    ignored.remove(&app_name);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_ignored_apps(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let ignored = state.ignored_apps.lock().unwrap();
+    Ok(ignored.iter().cloned().collect())
+}
+
+#[tauri::command]
+fn delete_app_records(state: State<'_, AppState>, app_name: String) -> Result<(), String> {
+    let conn = state.conn.lock().unwrap();
+    let _ = conn.execute("DELETE FROM daily_stats WHERE app_name = ?1", params![&app_name]);
+    let _ = conn.execute("DELETE FROM focus_apps WHERE app_name = ?1", params![&app_name]);
     Ok(())
 }
 
@@ -486,6 +589,44 @@ pub fn run() {
                 [],
             ).unwrap();
 
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS focus_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    duration INTEGER NOT NULL DEFAULT 0
+                )",
+                [],
+            ).unwrap();
+
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS focus_session_apps (
+                    session_id INTEGER NOT NULL,
+                    app_name TEXT NOT NULL,
+                    duration INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(session_id) REFERENCES focus_sessions(id),
+                    UNIQUE(session_id, app_name)
+                )",
+                [],
+            ).unwrap();
+
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS ignored_apps (
+                    app_name TEXT NOT NULL UNIQUE
+                )",
+                [],
+            ).unwrap();
+
+            let mut ignored_set = HashSet::new();
+            if let Ok(mut stmt) = conn.prepare("SELECT app_name FROM ignored_apps") {
+                if let Ok(iter) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                    for name in iter.flatten() {
+                        ignored_set.insert(name);
+                    }
+                }
+            }
+            let ignored_apps = Arc::new(Mutex::new(ignored_set));
+            let ignored_apps_for_thread = Arc::clone(&ignored_apps);
+
             let db_conn = Arc::new(Mutex::new(conn));
             let db_conn_for_thread = Arc::clone(&db_conn);
             
@@ -500,7 +641,20 @@ pub fn run() {
             let timer_state = Arc::new(AtomicU8::new(0));
             let timer_state_for_thread = Arc::clone(&timer_state);
 
-            app.manage(AppState { conn: db_conn, cache: app_cache, timer_state });
+            let force_flush = Arc::new(AtomicBool::new(false));
+            let force_flush_for_thread = Arc::clone(&force_flush);
+
+            let current_session_id = Arc::new(AtomicUsize::new(0));
+            let current_session_id_for_thread = Arc::clone(&current_session_id);
+
+            app.manage(AppState { 
+                conn: db_conn, 
+                cache: app_cache, 
+                timer_state, 
+                ignored_apps,
+                force_flush,
+                current_session_id,
+            });
 
             thread::spawn(move || {
                 let mut sys = System::new();
@@ -511,6 +665,9 @@ pub fn run() {
                 let mut focus_time_cache = 0;
                 let mut rest_time_cache = 0;
                 let mut focus_apps_cache: HashMap<String, i32> = HashMap::new();
+                
+                let mut session_focus_time_cache = 0;
+                let mut focus_session_apps_cache: HashMap<String, i32> = HashMap::new();
 
                 if let Ok(conn) = db_conn_for_thread.lock() {
                     if let Ok(mut stmt) = conn.prepare("SELECT DISTINCT app_name FROM daily_stats WHERE active_duration > 0") {
@@ -568,6 +725,14 @@ pub fn run() {
                             }
                         }
 
+                        {
+                            let ignored = ignored_apps_for_thread.lock().unwrap();
+                            if ignored.contains(&active_clean_name) {
+                                active_clean_name.clear();
+                            }
+                            running_clean_names.retain(|x| !ignored.contains(x));
+                        }
+
                         // Чистим кэш имен изредка
                         if flush_counter % 120 == 0 {
                             name_cache.clear();
@@ -592,14 +757,18 @@ pub fn run() {
                         let current_state = timer_state_for_thread.load(Ordering::Relaxed);
                         if current_state == 1 {
                             focus_time_cache += 5;
+                            session_focus_time_cache += 5;
                             if !active_clean_name.is_empty() {
                                 *focus_apps_cache.entry(active_clean_name.clone()).or_insert(0) += 5;
+                                *focus_session_apps_cache.entry(active_clean_name.clone()).or_insert(0) += 5;
                             }
                         } else if current_state == 2 {
                             rest_time_cache += 5;
                         }
+                    }
 
-                        if flush_counter >= 24 {
+                    let force = force_flush_for_thread.swap(false, Ordering::Relaxed);
+                    if flush_counter >= 24 || force {
                             if let Ok(conn) = db_conn_for_thread.lock() {
                                 let mut cache_lock = app_cache_for_thread.lock().unwrap();
                                 
@@ -639,17 +808,39 @@ pub fn run() {
                                         ", params![app_name, duration]);
                                     }
                                 }
+                                
+                                let sid = current_session_id_for_thread.load(Ordering::Relaxed);
+                                if sid != 0 && (session_focus_time_cache > 0 || !focus_session_apps_cache.is_empty()) {
+                                    if session_focus_time_cache > 0 {
+                                        let _ = conn.execute("
+                                            UPDATE focus_sessions SET duration = duration + ?1 WHERE id = ?2;
+                                        ", params![session_focus_time_cache, sid]);
+                                        session_focus_time_cache = 0;
+                                    }
+                                    for (app_name, duration) in focus_session_apps_cache.drain() {
+                                        if duration > 0 {
+                                            let _ = conn.execute("
+                                                INSERT INTO focus_session_apps (session_id, app_name, duration)
+                                                VALUES (?1, ?2, ?3)
+                                                ON CONFLICT(session_id, app_name) DO UPDATE SET duration = duration + ?3;
+                                            ", params![sid, app_name, duration]);
+                                        }
+                                    }
+                                } else {
+                                    session_focus_time_cache = 0;
+                                    focus_session_apps_cache.clear();
+                                }
                             }
                             flush_counter = 0;
                         }
-                    }
                 }
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_stats_for_date, get_month_stats, show_window,
-            get_focus_stats, save_focus_stats, get_focus_month_stats, clear_focus_stats, set_timer_state
+            get_focus_stats, save_focus_stats, get_focus_month_stats, clear_focus_stats, set_timer_state, start_new_focus_session,
+            flush_timer_stats, ignore_app, unignore_app, get_ignored_apps, delete_app_records
         ])
         .run(tauri::generate_context!())
         .expect("error");

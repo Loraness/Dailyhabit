@@ -18,7 +18,7 @@ import DatePickerModal from './components/DatePickerModal';
 
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 
-const MemoizedPieChart = memo(({ refreshKey, pieChartData, OTHER_COLOR, getAppColor, setColorPanel }: any) => (
+const MemoizedPieChart = memo(({ refreshKey, pieChartData, OTHER_COLOR, getAppColor, setColorPanel, getAppDisplayName }: any) => (
   <ResponsiveContainer key={`pie-${refreshKey}`} width="99%" height="100%" minHeight={0} minWidth={0}>
     <PieChart>
       <Pie 
@@ -40,7 +40,7 @@ const MemoizedPieChart = memo(({ refreshKey, pieChartData, OTHER_COLOR, getAppCo
           <Cell key={`cell-${index}`} fill={entry.isOther ? OTHER_COLOR : getAppColor(entry.name)} className="hover:opacity-80 transition-opacity outline-none" />
         ))}
       </Pie>
-      <Tooltip content={<CustomTooltip getAppColor={getAppColor} OTHER_COLOR={OTHER_COLOR} />} />
+      <Tooltip content={<CustomTooltip getAppColor={getAppColor} OTHER_COLOR={OTHER_COLOR} getAppDisplayName={getAppDisplayName} />} />
     </PieChart>
   </ResponsiveContainer>
 ));
@@ -96,6 +96,8 @@ function App() {
   const [isFocusLoaded, setIsFocusLoaded] = useState(false);
   const [historyFocusUsage, setHistoryFocusUsage] = useState<Record<string, number>>({});
   const [historyTimerStats, setHistoryTimerStats] = useState<DailyTimerStats>({focus: 0, rest: 0});
+  const [focusSessions, setFocusSessions] = useState<any[]>([]);
+  const [historyFocusSessions, setHistoryFocusSessions] = useState<any[]>([]);
   const [selectedFocusDate, setSelectedFocusDate] = useState<string>(getTodayString());
   const [isFocusDatePickerOpen, setIsFocusDatePickerOpen] = useState(false);
   const [focusCalendarMonth, setFocusCalendarMonth] = useState(new Date());
@@ -109,10 +111,12 @@ function App() {
       if (selectedFocusDate === getTodayString()) {
         setFocusUsage(prev => Object.keys(prev).length > Object.keys(usage).length ? prev : usage);
         setDailyTimerStats(prev => prev.focus > res.focus_time ? prev : { focus: res.focus_time, rest: res.rest_time });
+        setFocusSessions(res.sessions || []);
         setIsFocusLoaded(true);
       } else {
         setHistoryFocusUsage(usage);
         setHistoryTimerStats({ focus: res.focus_time, rest: res.rest_time });
+        setHistoryFocusSessions(res.sessions || []);
       }
     }).catch((e) => {
       console.error(e);
@@ -150,6 +154,11 @@ function App() {
     setTimeout(checkForUpdates, 3000);
   }, []);
 
+  const [ignoredApps, setIgnoredApps] = useState<string[]>([]);
+  useEffect(() => {
+    invoke('get_ignored_apps').then((apps) => setIgnoredApps(apps as string[])).catch(console.error);
+  }, []);
+
   const displayFocusUsage = selectedFocusDate === getTodayString() ? focusUsage : historyFocusUsage;
   const displayTimerStats = selectedFocusDate === getTodayString() ? dailyTimerStats : historyTimerStats;
   const [viewMode, setViewMode] = useState<'active' | 'background'>('active');
@@ -160,6 +169,24 @@ function App() {
     const saved = localStorage.getItem('customAppColors');
     return saved ? JSON.parse(saved) : {};
   });
+
+  const [customNames, setCustomNames] = useState<Record<string, string>>(() => {
+    const saved = localStorage.getItem('customAppNames');
+    return saved ? JSON.parse(saved) : {};
+  });
+
+  const getAppDisplayName = useCallback((appName: string) => customNames[appName] || appName, [customNames]);
+
+  const handleNameChange = (appName: string, newName: string) => {
+    const updated = { ...customNames };
+    if (!newName.trim() || newName.trim() === appName) {
+      delete updated[appName];
+    } else {
+      updated[appName] = newName.trim();
+    }
+    setCustomNames(updated);
+    localStorage.setItem('customAppNames', JSON.stringify(updated));
+  };
 
   const [colorPanel, setColorPanel] = useState<{ visible: boolean, appName: string } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -311,21 +338,29 @@ function App() {
     invoke('set_timer_state', { timerState: stateCode }).catch(console.error);
 
     if (timerState === 'idle' && !timerActive && isFocusLoaded) {
-      // Подтягиваем свежую статистику фокуса с бэкенда, чтобы обновить UI
-      invoke('get_focus_stats', { date: getTodayString() }).then((res: any) => {
-        const usage: Record<string, number> = {};
-        res.apps.forEach((a: any) => usage[a.name] = a.duration);
-        setFocusUsage(usage);
-        setDailyTimerStats({ focus: res.focus_time, rest: res.rest_time });
-      }).catch(console.error);
+      const updateStats = async () => {
+        try {
+          await invoke('flush_timer_stats');
+          const res: any = await invoke('get_focus_stats', { date: getTodayString() });
+          const usage: Record<string, number> = {};
+          res.apps.forEach((a: any) => usage[a.name] = a.duration);
+          setFocusUsage(usage);
+          setDailyTimerStats({ focus: res.focus_time, rest: res.rest_time });
+          setFocusSessions(res.sessions || []);
+        } catch (e) {
+          console.error(e);
+        }
+      };
+      updateStats();
     }
   }, [timerState, timerActive, isFocusLoaded]);
 
-  const toggleTimer = useCallback(() => {
+  const toggleTimer = useCallback(async () => {
     expectedEndTime.current = 0;
     if (timerState === 'idle') {
       const work = Number(timerSettings.workMinutes);
       if (!work) return;
+      try { await invoke('start_new_focus_session'); } catch (e) { console.error(e); }
       setTimerState('work'); setTimeLeft(work * 60); setTotalPhaseTime(work * 60); setCurrentCycle(1);
     }
     setTimerActive(active => !active);
@@ -429,8 +464,46 @@ function App() {
     setFocusCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + offset, 1));
   }, []);
 
+  const [contextMenu, setContextMenu] = useState<{ visible: boolean, x: number, y: number, appName: string } | null>(null);
+  const [actionConfirm, setActionConfirm] = useState<{ type: 'ignore' | 'unignore' | 'delete', appName: string } | null>(null);
+  const [renameModal, setRenameModal] = useState<{ visible: boolean, originalName: string, currentName: string } | null>(null);
+
+  const handleAppContextMenu = useCallback((e: React.MouseEvent, appName: string) => {
+    e.preventDefault();
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, appName });
+  }, []);
+
+  const closeContextMenu = useCallback(() => {
+    if (contextMenu?.visible) setContextMenu(null);
+  }, [contextMenu]);
+
+  const executeAction = async () => {
+    if (!actionConfirm) return;
+    try {
+      if (actionConfirm.type === 'ignore') {
+        await invoke('ignore_app', { appName: actionConfirm.appName });
+        setIgnoredApps(prev => [...prev, actionConfirm.appName]);
+      } else if (actionConfirm.type === 'unignore') {
+        await invoke('unignore_app', { appName: actionConfirm.appName });
+        setIgnoredApps(prev => prev.filter(a => a !== actionConfirm.appName));
+      } else if (actionConfirm.type === 'delete') {
+        await invoke('delete_app_records', { appName: actionConfirm.appName });
+      }
+      await fetchData(true);
+    } catch (e) {
+      console.error("Ошибка выполнения действия:", e);
+    }
+    setActionConfirm(null);
+  };
+
+  const submitRename = () => {
+    if (!renameModal) return;
+    handleNameChange(renameModal.originalName, renameModal.currentName);
+    setRenameModal(null);
+  };
+
   return (
-    <div className="h-screen bg-slate-50 dark:bg-slate-900 font-sans cursor-default transition-colors duration-300 flex flex-col rounded-xl overflow-hidden shadow-2xl outline-none border-none ring-0">
+    <div className="h-screen bg-slate-50 dark:bg-slate-900 font-sans cursor-default transition-colors duration-300 flex flex-col rounded-xl overflow-hidden shadow-2xl outline-none border-none ring-0" onClick={closeContextMenu}>
       <Titlebar />
 
       <div className="flex-1 overflow-y-auto custom-scrollbar px-8 pb-8 pt-3">
@@ -479,6 +552,7 @@ function App() {
               selectedDate={selectedDate} getTodayString={getTodayString} getAppColor={getAppColor} 
               fetchData={fetchData} isRefreshing={isRefreshing} chartLimit={chartLimit} setChartLimit={setChartLimit} 
               memoizedPieChart={<MemoizedPieChart refreshKey={refreshKey} pieChartData={pieChartData} OTHER_COLOR={OTHER_COLOR} getAppColor={getAppColor} isDarkMode={isDarkMode} setColorPanel={setColorPanel} />} 
+              onAppContextMenu={handleAppContextMenu}
             />
           )}
 
@@ -487,6 +561,8 @@ function App() {
               barChartData={barChartData} fetchData={fetchData} isRefreshing={isRefreshing} 
               memoizedBarChart={<MemoizedBarChart refreshKey={refreshKey} barChartData={barChartData} isDarkMode={isDarkMode} getAppColor={getAppColor} OTHER_COLOR={OTHER_COLOR} />} 
               categorizedData={categorizedData} 
+              onAppContextMenu={handleAppContextMenu}
+              getAppDisplayName={getAppDisplayName}
             />
           )}
 
@@ -499,12 +575,16 @@ function App() {
               displayTimerStats={displayTimerStats} selectedFocusDate={selectedFocusDate} 
               setIsFocusDatePickerOpen={setIsFocusDatePickerOpen} setIsClearConfirmOpen={setIsClearConfirmOpen} 
               sortedFocusApps={sortedFocusApps} getAppColor={getAppColor} 
+              getAppDisplayName={getAppDisplayName}
+              sessions={selectedFocusDate === getTodayString() ? focusSessions : historyFocusSessions}
             />
           )}
 
           <SettingsModal 
             isOpen={isSettingsOpen} setIsOpen={setIsSettingsOpen} autoStartEnabled={autoStartEnabled} 
             toggleAutoStart={toggleAutoStart} bringToFrontEnabled={bringToFrontEnabled} setBringToFrontEnabled={setBringToFrontEnabled} 
+            ignoredApps={ignoredApps} setIgnoredApps={setIgnoredApps}
+            getAppDisplayName={getAppDisplayName}
           />
 
           <DatePickerModal 
@@ -530,11 +610,121 @@ function App() {
                 <div className="flex gap-3">
                   <button onClick={() => setIsClearConfirmOpen(false)} className="flex-1 py-3 rounded-xl font-bold text-slate-600 dark:text-slate-300 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 transition-colors">Отмена</button>
                   <button onClick={() => {
-                    if (selectedFocusDate === getTodayString()) { setFocusUsage({}); setDailyTimerStats({ focus: 0, rest: 0 }); }
-                    else { setHistoryFocusUsage({}); setHistoryTimerStats({ focus: 0, rest: 0 }); }
+                    if (selectedFocusDate === getTodayString()) { setFocusUsage({}); setDailyTimerStats({ focus: 0, rest: 0 }); setFocusSessions([]); }
+                    else { setHistoryFocusUsage({}); setHistoryTimerStats({ focus: 0, rest: 0 }); setHistoryFocusSessions([]); }
                     invoke('clear_focus_stats', { date: selectedFocusDate }).catch(console.error);
                     setIsClearConfirmOpen(false);
                   }} className="flex-1 py-3 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 drop-shadow-md transition-colors">Очистить</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {contextMenu && contextMenu.visible && (
+            <div 
+              className="fixed z-[100] bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-100 dark:border-slate-700 overflow-hidden flex flex-col py-1 min-w-[220px] animate-in fade-in zoom-in-95 duration-100"
+              style={{ 
+                left: Math.min(contextMenu.x, window.innerWidth - 220), 
+                top: Math.min(contextMenu.y, window.innerHeight - 120) 
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-700 mb-1">
+                <span className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider truncate block" title={getAppDisplayName(contextMenu.appName)}>{getAppDisplayName(contextMenu.appName)}</span>
+              </div>
+              <button 
+                onClick={() => { setRenameModal({ visible: true, originalName: contextMenu.appName, currentName: getAppDisplayName(contextMenu.appName) }); setContextMenu(null); }}
+                className="px-4 py-2.5 text-sm font-medium text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors flex items-center space-x-2"
+              >
+                <span className="opacity-70">✏️</span>
+                <span>Изменить название</span>
+              </button>
+              {ignoredApps.includes(contextMenu.appName) ? (
+                <button 
+                  onClick={() => { setActionConfirm({ type: 'unignore', appName: contextMenu.appName }); setContextMenu(null); }}
+                  className="px-4 py-2.5 text-sm font-medium text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors flex items-center space-x-2"
+                >
+                  <span className="opacity-70">🔄</span>
+                  <span>Вернуть в отслеживание</span>
+                </button>
+              ) : (
+                <button 
+                  onClick={() => { setActionConfirm({ type: 'ignore', appName: contextMenu.appName }); setContextMenu(null); }}
+                  className="px-4 py-2.5 text-sm font-medium text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors flex items-center space-x-2"
+                >
+                  <span className="opacity-70">🚫</span>
+                  <span>Больше не отслеживать</span>
+                </button>
+              )}
+              <button 
+                onClick={() => { setActionConfirm({ type: 'delete', appName: contextMenu.appName }); setContextMenu(null); }}
+                className="px-4 py-2.5 text-sm font-medium text-left text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors flex items-center space-x-2"
+              >
+                <span className="opacity-70">🗑️</span>
+                <span>Удалить всю историю</span>
+              </button>
+            </div>
+          )}
+
+          {renameModal && renameModal.visible && (
+            <div className="fixed inset-0 z-60 flex items-center justify-center bg-slate-900/30 dark:bg-slate-900/60 backdrop-blur-sm transition-all p-4" onClick={() => setRenameModal(null)}>
+              <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-700 w-full max-w-sm animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center space-x-3 mb-5">
+                  <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-500/20 text-indigo-500 rounded-xl flex items-center justify-center text-xl shadow-sm">
+                    ✏️
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-700 dark:text-slate-200">Переименовать</h3>
+                </div>
+                <div className="mb-6">
+                  <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 block uppercase tracking-wider">Новое название для "{renameModal.originalName}"</label>
+                  <input 
+                    type="text" 
+                    value={renameModal.currentName}
+                    onChange={(e) => setRenameModal({...renameModal, currentName: e.target.value})}
+                    onKeyDown={(e) => e.key === 'Enter' && submitRename()}
+                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 font-semibold text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
+                    placeholder="Введите название..."
+                    autoFocus
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setRenameModal(null)} className="flex-1 py-3 rounded-xl font-bold text-slate-600 dark:text-slate-300 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 transition-colors">Отмена</button>
+                  <button onClick={submitRename} className="flex-1 py-3 rounded-xl font-bold text-white bg-indigo-500 hover:bg-indigo-600 drop-shadow-md transition-colors">Сохранить</button>
+                </div>
+                <button onClick={() => { handleNameChange(renameModal.originalName, renameModal.originalName); setRenameModal(null); }} className="w-full mt-3 py-2 text-xs font-semibold text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 transition-colors uppercase tracking-wider">Сбросить по умолчанию</button>
+              </div>
+            </div>
+          )}
+
+          {actionConfirm && (
+            <div className="fixed inset-0 z-60 flex items-center justify-center bg-slate-900/30 dark:bg-slate-900/60 backdrop-blur-sm transition-all p-4" onClick={() => setActionConfirm(null)}>
+              <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-700 w-full max-w-sm animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+                <div className="text-center mb-6">
+                  <div className={`w-16 h-16 rounded-full flex items-center justify-center text-3xl mx-auto mb-4 ${
+                    actionConfirm.type === 'delete' ? 'bg-red-100 dark:bg-red-500/20 text-red-500' :
+                    actionConfirm.type === 'ignore' ? 'bg-orange-100 dark:bg-orange-500/20 text-orange-500' :
+                    'bg-indigo-100 dark:bg-indigo-500/20 text-indigo-500'
+                  }`}>
+                    {actionConfirm.type === 'delete' ? '🗑️' : actionConfirm.type === 'ignore' ? '🚫' : '🔄'}
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-700 dark:text-slate-200 mb-2">
+                    {actionConfirm.type === 'delete' ? 'Удалить историю?' : actionConfirm.type === 'ignore' ? 'Скрыть приложение?' : 'Вернуть приложение?'}
+                  </h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    {actionConfirm.type === 'delete' ? `Вы собираетесь удалить всю историю для "${actionConfirm.appName}". Это действие нельзя отменить.` :
+                     actionConfirm.type === 'ignore' ? `Приложение "${actionConfirm.appName}" больше не будет отслеживаться.` :
+                     `Приложение "${actionConfirm.appName}" снова будет отслеживаться.`}
+                  </p>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setActionConfirm(null)} className="flex-1 py-3 rounded-xl font-bold text-slate-600 dark:text-slate-300 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 transition-colors">Отмена</button>
+                  <button onClick={executeAction} className={`flex-1 py-3 rounded-xl font-bold text-white drop-shadow-md transition-colors ${
+                    actionConfirm.type === 'delete' ? 'bg-red-500 hover:bg-red-600' :
+                    actionConfirm.type === 'ignore' ? 'bg-orange-500 hover:bg-orange-600' :
+                    'bg-indigo-500 hover:bg-indigo-600'
+                  }`}>
+                    {actionConfirm.type === 'delete' ? 'Удалить' : actionConfirm.type === 'ignore' ? 'Скрыть' : 'Вернуть'}
+                  </button>
                 </div>
               </div>
             </div>
