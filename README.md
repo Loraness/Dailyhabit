@@ -71,7 +71,15 @@ Dailyhabit/
 
 ---
 
-## 🚀 Запуск и сборка
+## 📥 Скачивание
+
+Готовые исполняемые файлы под Windows доступны на странице [GitHub Releases](https://github.com/Loraness/Dailyhabit/releases).
+
+Для быстрой установки скачайте последнюю версию инсталлятора `dailyhabit_X.X.X_x64-setup.exe` и запустите его.
+
+---
+
+## 🚀 Запуск и сборка из исходников
 
 ### Требования
 - **Node.js** (v18+)
@@ -80,8 +88,8 @@ Dailyhabit/
 ### Разработка
 ```bash
 # 1. Клонировать репозиторий
-git clone https://github.com/Loraness/DailyHabits.git
-cd DailyHabits
+git clone https://github.com/Loraness/Dailyhabit.git
+cd Dailyhabit/dailyhabit
 
 # 2. Установить зависимости
 npm install
