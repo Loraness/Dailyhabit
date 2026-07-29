@@ -288,7 +288,6 @@ function App() {
     const bringWindowToFront = async () => {
       if (!bringToFrontEnabled) return;
       try {
-        // Вызываем обновленную команду в Rust
         await invoke('show_window');
       } catch (e) {
         console.error("Ошибка при попытке развернуть окно:", e);
