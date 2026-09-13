@@ -1,11 +1,11 @@
 {
-  "version": "0.4.0",
-  "notes": "### Что нового в версии 0.4.0:\n- Добавлена детализация сессий фокуса: статистика разбивается на отдельные блоки (Фокус 1, Фокус 2) при каждом запуске таймера\n- Добавлено контекстное меню для приложений (вызывается правым кликом в дашборде и категориях)\n- Появилась возможность скрывать приложения из статистики (добавлять в исключения) и полностью удалять их историю\n- Добавлена функция кастомного переименования отслеживаемых программ\n- Улучшена скорость синхронизации данных при остановке таймера\n\nПриятного использования!",
-  "pub_date": "2026-05-27T00:00:00Z",
+  "version": "0.5.0",
+  "notes": "### Что нового в версии 0.5.0:\n- Сохранение настроек таймера (работа, отдых, циклы, автостарт) между перезапусками приложения\n- Возможность добавлять веб-сайты (например, LeetCode, Coursera, Хабр) в отдельное отслеживание в Настройках\n- Смена категории приложения по правому клику мыши (ПКМ) с сохранением истории прошлых дней\n- Улучшено позиционирование контекстного меню у границ экрана\n\nПриятного использования!",
+  "pub_date": "2026-09-13T16:45:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaFNjcHR1QVNrLzhYNWxEa0o2V1FVa0FyR2dPdnFvTnYxSUdEU092TnZOY1NlTGFzNy9WdWx4SEQ5MnRQOWNHQmwzaHl3bWhJNXFKR2psU3JIRXovbjAyMDVLNW0yWXdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5OTAzOTY5CWZpbGU6ZGFpbHloYWJpdF8wLjQuMF94NjQtc2V0dXAuZXhlCjZQTHR4RDdNQXg4NktpSy9tdjc5Y1RROUF2Tkg2UlRMdjVlM21EbzNvUkhTMG5SS3RGT0R0b1NML0pFbllzY0Z4MUN3OUhyUlFoeTNFUWhoNFEwcURBPT0K",
-      "url": "https://github.com/Loraness/Dailyhabit/releases/download/v0.4.0/dailyhabit_0.4.0_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTaFNjcHR1QVNrLzF1cEIxVzc3RGxwTUVwdEJTLzltWmtEMVdvL1VwalNkWlJneDhtZHZya0xvWmtSelZSdEo4R3BUai9SZ1NPVWxZcVhJWmtZMUVGYUUrMGo2ZGJLa2dVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MzA3MTUyCWZpbGU6ZGFpbHloYWJpdF8wLjUuMF94NjQtc2V0dXAuZXhlCnorTmVrRDBxd3ZENEpHUk5tMlJYeTcyd2Zuc3lkL2xYa0FTQ1EvRC9xZXN1UTNtSG5CcW5ZSXh3K2s1SkNuZ0dPNTVkZkVNRUV2UFRqSTkrQnFXK0R3PT0K",
+      "url": "https://github.com/Loraness/Dailyhabit/releases/download/v0.5.0/dailyhabit_0.5.0_x64-setup.exe"
     }
   }
 }
