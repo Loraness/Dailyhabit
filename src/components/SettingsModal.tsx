@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 import { check, Update } from '@tauri-apps/plugin-updater';
+import { CustomSite } from '../types';
+import { CATEGORY_LIST, normalizeSitePattern } from '../utils';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -23,7 +25,55 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isChecking, setIsChecking] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<Update | null>(null);
   const [updateMessage, setUpdateMessage] = useState<string>('');
-  const [view, setView] = useState<'main' | 'ignored'>('main');
+  const [view, setView] = useState<'main' | 'ignored' | 'sites'>('main');
+
+  const [customSites, setCustomSites] = useState<CustomSite[]>([]);
+  const [siteName, setSiteName] = useState('');
+  const [sitePattern, setSitePattern] = useState('');
+  const [siteCategory, setSiteCategory] = useState('study');
+  const [siteError, setSiteError] = useState('');
+
+  const loadCustomSites = async () => {
+    try {
+      const list = await invoke<CustomSite[]>('get_custom_sites');
+      setCustomSites(list);
+    } catch (e) {
+      console.error('Не удалось загрузить сайты:', e);
+    }
+  };
+
+  useEffect(() => {
+    if (view === 'sites') loadCustomSites();
+  }, [view]);
+
+  const handleAddSite = async () => {
+    setSiteError('');
+    const name = siteName.trim();
+    const pattern = normalizeSitePattern(sitePattern);
+
+    if (!name) { setSiteError('Введите название'); return; }
+    if (!pattern) { setSiteError('Введите адрес сайта'); return; }
+    if (pattern.length < 2) { setSiteError('Слишком короткий адрес'); return; }
+
+    try {
+      await invoke('add_custom_site', { name, pattern, category: siteCategory });
+      setSiteName('');
+      setSitePattern('');
+      await loadCustomSites();
+    } catch (e: any) {
+      setSiteError(typeof e === 'string' ? e : 'Не удалось добавить сайт');
+      console.error(e);
+    }
+  };
+
+  const handleDeleteSite = async (id: number) => {
+    try {
+      await invoke('delete_custom_site', { id });
+      await loadCustomSites();
+    } catch (e) {
+      console.error('Не удалось удалить сайт:', e);
+    }
+  };
 
   useEffect(() => {
     if (!isOpen) setView('main');
@@ -80,6 +130,116 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       </div>
     );
   };
+
+  if (view === 'sites') {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 dark:bg-slate-900/60 backdrop-blur-sm transition-all p-4" onClick={() => setIsOpen(false)}>
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-700 w-full max-w-md animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center mb-5 shrink-0">
+            <button onClick={() => setView('main')} className="w-8 h-8 mr-3 flex justify-center items-center rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors shrink-0" title="Назад">←</button>
+            <h3 className="text-xl font-bold text-slate-700 dark:text-slate-200">Добавить сайт</h3>
+            <button onClick={() => setIsOpen(false)} className="w-8 h-8 ml-auto flex justify-center items-center rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors shrink-0" title="Закрыть">✕</button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto pr-1 pb-2 custom-scrollbar space-y-4">
+
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-snug bg-slate-50 dark:bg-slate-900/50 rounded-xl p-3 border border-slate-100 dark:border-slate-700">
+              Приложения приложение находит само. А вот сайты внутри браузера
+              по умолчанию считаются просто как «браузер» — добавьте сюда те,
+              которые хотите видеть в статистике отдельно.
+            </p>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 block uppercase tracking-wider">Название</label>
+              <input
+                type="text"
+                value={siteName}
+                onChange={(e) => setSiteName(e.target.value)}
+                placeholder="Например: Coursera"
+                className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 font-semibold text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500 transition-colors"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 block uppercase tracking-wider">Адрес сайта</label>
+              <input
+                type="text"
+                value={sitePattern}
+                onChange={(e) => setSitePattern(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddSite()}
+                placeholder="coursera.org"
+                className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 font-semibold text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500 transition-colors"
+              />
+              <p className="text-xs text-slate-400 dark:text-slate-500 mt-2 leading-snug">
+                Можно вставить полную ссылку — лишнее уберётся автоматически.
+                Сайт определяется по заголовку окна браузера.
+              </p>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 block uppercase tracking-wider">Категория</label>
+              <div className="grid grid-cols-2 gap-2">
+                {CATEGORY_LIST.map(cat => (
+                  <button
+                    key={cat.id}
+                    onClick={() => setSiteCategory(cat.id)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-semibold border transition-all ${siteCategory === cat.id ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400' : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 text-slate-600 dark:text-slate-300'}`}
+                  >
+                    <span>{cat.icon}</span>
+                    <span className="truncate">{cat.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {siteError && (
+              <p className="text-sm font-semibold text-red-500 dark:text-red-400">{siteError}</p>
+            )}
+
+            <button
+              onClick={handleAddSite}
+              className="w-full py-3 rounded-xl font-bold text-white bg-indigo-500 hover:bg-indigo-600 transition-colors"
+            >
+              Добавить
+            </button>
+
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-700">
+              <h4 className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-3 uppercase tracking-wider">Мои сайты</h4>
+              {customSites.length === 0 ? (
+                <p className="text-sm text-center text-slate-500 dark:text-slate-400 py-4">Пока ничего не добавлено.</p>
+              ) : (
+                <div className="space-y-2">
+                  {customSites.map(site => {
+                    const cat = CATEGORY_LIST.find(c => c.id === site.category);
+                    return (
+                      <div key={site.id} className="flex justify-between items-center bg-slate-50 dark:bg-slate-900/50 p-3 rounded-xl border border-slate-100 dark:border-slate-700">
+                        <div className="min-w-0 pr-3">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm">🌐</span>
+                            <span className="text-sm font-semibold text-slate-700 dark:text-slate-200 truncate">{site.name}</span>
+                          </div>
+                          <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5 truncate">
+                            {site.pattern} · {cat ? cat.label : site.category}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteSite(site.id)}
+                          className="text-xs font-semibold text-red-600 hover:text-red-700 dark:text-red-400 px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 dark:bg-red-500/10 dark:hover:bg-red-500/20 transition-colors shrink-0"
+                        >
+                          Удалить
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (view === 'ignored') {
     return (
@@ -155,6 +315,17 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             </button>
           </div>
           
+          <button 
+            onClick={() => setView('sites')}
+            className="w-full flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 transition-colors"
+          >
+            <div className="text-left">
+              <h4 className="font-semibold text-slate-700 dark:text-slate-200">Добавить сайт в отслеживание</h4>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Считать сайт отдельно от браузера</p>
+            </div>
+            <span className="text-slate-400">→</span>
+          </button>
+
           <button 
             onClick={() => setView('ignored')}
             className="w-full flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 transition-colors"

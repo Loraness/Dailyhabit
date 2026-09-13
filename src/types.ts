@@ -20,3 +20,11 @@ export interface TimerSettings {
   cycles: number | '';
   autoStartNextPhase: boolean;
 }
+
+export interface CustomSite {
+  id: number;
+  name: string;
+  pattern: string;
+  category: string;
+}
+

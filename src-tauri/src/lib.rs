@@ -74,6 +74,14 @@ impl Rules {
     }
 }
 
+#[derive(Clone, serde::Serialize)]
+struct CustomSite {
+    id: i64,
+    name: String,
+    pattern: String,
+    category: String,
+}
+
 struct AppState {
     conn: Arc<Mutex<Connection>>,
     cache: Arc<Mutex<HashMap<String, (i32, i32)>>>,
@@ -81,6 +89,7 @@ struct AppState {
     ignored_apps: Arc<Mutex<HashSet<String>>>,
     force_flush: Arc<AtomicBool>,
     current_session_id: Arc<AtomicUsize>,
+    custom_sites: Arc<Mutex<Vec<CustomSite>>>,
 }
 
 #[derive(serde::Serialize)]
@@ -180,7 +189,12 @@ fn is_system_process(name: &str) -> bool {
     exact_matches_bases.contains(&base_name)
 }
 
-fn get_clean_name(app_name: &str, title: &str, rules: &Rules) -> String {
+fn get_clean_name(
+    app_name: &str,
+    title: &str,
+    rules: &Rules,
+    custom_sites: &[CustomSite],
+) -> String {
     let clean_app_name: String = app_name
         .chars()
         .filter(|c| c.is_alphanumeric() || c.is_ascii_punctuation() || *c == ' ')
@@ -205,7 +219,14 @@ fn get_clean_name(app_name: &str, title: &str, rules: &Rules) -> String {
     if let Some((b_name, _)) = browser_match {
         final_name = b_name.clone();
         if !lower_title.is_empty() {
-            if let Some((s_name, _)) = rules
+            let custom_hit = custom_sites.iter().find(|site| {
+                let pattern = site.pattern.to_lowercase();
+                !pattern.is_empty() && lower_title.contains(&pattern)
+            });
+
+            if let Some(hit) = custom_hit {
+                final_name = hit.name.clone();
+            } else if let Some((s_name, _)) = rules
                 .sites
                 .iter()
                 .find(|(_, matches)| matches.iter().any(|m| lower_title.contains(m)))
@@ -519,6 +540,159 @@ fn delete_app_records(state: State<'_, AppState>, app_name: String) -> Result<()
     Ok(())
 }
 
+fn reload_custom_sites(state: &State<'_, AppState>) {
+    let conn = state.conn.lock().unwrap();
+    let mut fresh: Vec<CustomSite> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT id, name, pattern, category FROM custom_sites ORDER BY id ASC",
+    ) {
+        if let Ok(iter) = stmt.query_map([], |row| {
+            Ok(CustomSite {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                pattern: row.get(2)?,
+                category: row.get(3)?,
+            })
+        }) {
+            for site in iter.flatten() {
+                fresh.push(site);
+            }
+        }
+    }
+    let mut cache = state.custom_sites.lock().unwrap();
+    *cache = fresh;
+}
+
+#[tauri::command]
+fn get_custom_sites(state: State<'_, AppState>) -> Result<Vec<CustomSite>, String> {
+    let sites = state.custom_sites.lock().unwrap();
+    Ok(sites.clone())
+}
+
+#[tauri::command]
+fn add_custom_site(
+    state: State<'_, AppState>,
+    name: String,
+    pattern: String,
+    category: String,
+) -> Result<(), String> {
+    let name = name.trim().to_string();
+    let pattern = pattern.trim().to_lowercase();
+
+    if name.is_empty() {
+        return Err("Название не может быть пустым".to_string());
+    }
+    if pattern.len() < 2 {
+        return Err("Адрес сайта слишком короткий".to_string());
+    }
+
+    let allowed = ["study", "entertainment", "games", "social", "other"];
+    let category = if allowed.contains(&category.as_str()) {
+        category
+    } else {
+        "other".to_string()
+    };
+
+    {
+        let conn = state.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO custom_sites (name, pattern, category)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(pattern) DO UPDATE SET name = ?1, category = ?3",
+            params![&name, &pattern, &category],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    reload_custom_sites(&state);
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_custom_site(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    {
+        let conn = state.conn.lock().unwrap();
+        let _ = conn.execute("DELETE FROM custom_sites WHERE id = ?1", params![id]);
+    }
+    reload_custom_sites(&state);
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct CategoryOverride {
+    app_name: String,
+    category: String,
+}
+
+#[tauri::command]
+fn set_app_category(
+    state: State<'_, AppState>,
+    app_name: String,
+    category: String,
+) -> Result<String, String> {
+    let allowed = ["study", "entertainment", "games", "social", "other"];
+    if !allowed.contains(&category.as_str()) {
+        return Err("Неизвестная категория".to_string());
+    }
+    if app_name.trim().is_empty() {
+        return Err("Пустое имя приложения".to_string());
+    }
+
+    let conn = state.conn.lock().unwrap();
+
+    conn.execute(
+        "INSERT INTO category_overrides (app_name, effective_from_date, category)
+         VALUES (?1, date('now', 'localtime'), ?2)
+         ON CONFLICT(app_name, effective_from_date) DO UPDATE SET category = ?2",
+        params![&app_name, &category],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let today: String = conn
+        .query_row("SELECT date('now', 'localtime')", [], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    Ok(today)
+}
+
+#[tauri::command]
+fn get_category_overrides(
+    state: State<'_, AppState>,
+    date: String,
+) -> Result<Vec<CategoryOverride>, String> {
+    let conn = state.conn.lock().unwrap();
+    let mut result = Vec::new();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT o.app_name, o.category
+             FROM category_overrides o
+             WHERE o.effective_from_date <= ?1
+               AND o.effective_from_date = (
+                   SELECT MAX(i.effective_from_date)
+                   FROM category_overrides i
+                   WHERE i.app_name = o.app_name
+                     AND i.effective_from_date <= ?1
+               )",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let iter = stmt
+        .query_map([&date], |row| {
+            Ok(CategoryOverride {
+                app_name: row.get(0)?,
+                category: row.get(1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    for item in iter.flatten() {
+        result.push(item);
+    }
+
+    Ok(result)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -616,6 +790,32 @@ pub fn run() {
                 [],
             ).unwrap();
 
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS custom_sites (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    pattern TEXT NOT NULL UNIQUE,
+                    category TEXT NOT NULL
+                )",
+                [],
+            ).unwrap();
+
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS category_overrides (
+                    app_name TEXT NOT NULL,
+                    effective_from_date TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    PRIMARY KEY (app_name, effective_from_date)
+                )",
+                [],
+            ).unwrap();
+
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cat_overrides
+                 ON category_overrides(app_name, effective_from_date)",
+                [],
+            ).unwrap();
+
             let mut ignored_set = HashSet::new();
             if let Ok(mut stmt) = conn.prepare("SELECT app_name FROM ignored_apps") {
                 if let Ok(iter) = stmt.query_map([], |row| row.get::<_, String>(0)) {
@@ -626,6 +826,26 @@ pub fn run() {
             }
             let ignored_apps = Arc::new(Mutex::new(ignored_set));
             let ignored_apps_for_thread = Arc::clone(&ignored_apps);
+
+            let mut custom_sites_vec: Vec<CustomSite> = Vec::new();
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT id, name, pattern, category FROM custom_sites ORDER BY id ASC",
+            ) {
+                if let Ok(iter) = stmt.query_map([], |row| {
+                    Ok(CustomSite {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        pattern: row.get(2)?,
+                        category: row.get(3)?,
+                    })
+                }) {
+                    for site in iter.flatten() {
+                        custom_sites_vec.push(site);
+                    }
+                }
+            }
+            let custom_sites = Arc::new(Mutex::new(custom_sites_vec));
+            let custom_sites_for_thread = Arc::clone(&custom_sites);
 
             let db_conn = Arc::new(Mutex::new(conn));
             let db_conn_for_thread = Arc::clone(&db_conn);
@@ -654,6 +874,7 @@ pub fn run() {
                 ignored_apps,
                 force_flush,
                 current_session_id,
+                custom_sites,
             });
 
             thread::spawn(move || {
@@ -701,12 +922,17 @@ pub fn run() {
                         tick_accumulator -= 5000;
                         flush_counter += 1;
 
+                        let active_custom_sites: Vec<CustomSite> = {
+                            let guard = custom_sites_for_thread.lock().unwrap();
+                            guard.clone()
+                        };
+
                         let mut active_clean_name = String::new();
                         if let Ok(active_window) = get_active_window() {
                             let app_name = active_window.app_name;
                             let title = active_window.title;
                             if !app_name.is_empty() && !is_system_process(&app_name) && !app_name.to_lowercase().contains("dailyhabit") {
-                                active_clean_name = get_clean_name(&app_name, &title, &rules_for_thread);
+                                active_clean_name = get_clean_name(&app_name, &title, &rules_for_thread, &active_custom_sites);
                             }
                         }
 
@@ -717,7 +943,7 @@ pub fn run() {
                                 let clean = if let Some(cached) = name_cache.get(name) {
                                     cached.clone()
                                 } else {
-                                    let cleaned = get_clean_name(name, "", &rules_for_thread);
+                                    let cleaned = get_clean_name(name, "", &rules_for_thread, &active_custom_sites);
                                     name_cache.insert(name.to_string(), cleaned.clone());
                                     cleaned
                                 };
@@ -840,7 +1066,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_stats_for_date, get_month_stats, show_window,
             get_focus_stats, save_focus_stats, get_focus_month_stats, clear_focus_stats, set_timer_state, start_new_focus_session,
-            flush_timer_stats, ignore_app, unignore_app, get_ignored_apps, delete_app_records
+            flush_timer_stats, ignore_app, unignore_app, get_ignored_apps, delete_app_records,
+            get_custom_sites, add_custom_site, delete_custom_site,
+            set_app_category, get_category_overrides
         ])
         .run(tauri::generate_context!())
         .expect("error");

@@ -6,7 +6,7 @@ import { relaunch } from '@tauri-apps/plugin-process';
 import './App.css';
 
 import { AppUsage, DailyTimerStats, TimerSettings } from './types';
-import { getCategoryInfo, getPaletteColor, getTodayString, OTHER_COLOR, PALETTE } from './utils';
+import { getCategoryInfo, getPaletteColor, getTodayString, OTHER_COLOR, PALETTE, loadTimerSettings, saveTimerSettings, CATEGORY_LIST } from './utils';
 
 import Titlebar from './components/Titlebar';
 import CustomTooltip from './components/CustomTooltip';
@@ -70,12 +70,7 @@ function App() {
   const [timerActive, setTimerActive] = useState(false);
   const [currentCycle, setCurrentCycle] = useState(1);
   
-  const [timerSettings, setTimerSettings] = useState<TimerSettings>({
-    workMinutes: 50,
-    restMinutes: 10,
-    cycles: 3,
-    autoStartNextPhase: false
-  });
+  const [timerSettings, setTimerSettings] = useState<TimerSettings>(() => loadTimerSettings());
 
   const [smartCalc, setSmartCalc] = useState({
     totalWorkHours: 3,
@@ -191,6 +186,18 @@ function App() {
   const [colorPanel, setColorPanel] = useState<{ visible: boolean, appName: string } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  const [customSiteCategories, setCustomSiteCategories] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    invoke<any[]>('get_custom_sites')
+      .then(list => {
+        const map: Record<string, string> = {};
+        list.forEach(s => { map[s.name] = s.category; });
+        setCustomSiteCategories(map);
+      })
+      .catch(console.error);
+  }, [isSettingsOpen]);
   const [autoStartEnabled, setAutoStartEnabled] = useState(true);
 
   const [bringToFrontEnabled, setBringToFrontEnabled] = useState(() => {
@@ -227,6 +234,26 @@ function App() {
 
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedDate, setSelectedDate] = useState<string>(getTodayString());
+
+  const [categoryOverrides, setCategoryOverrides] = useState<Record<string, string>>({});
+
+  const loadCategoryOverrides = useCallback(async (date: string) => {
+    try {
+      const list = await invoke<{ app_name: string; category: string }[]>(
+        'get_category_overrides',
+        { date }
+      );
+      const map: Record<string, string> = {};
+      list.forEach(o => { map[o.app_name] = o.category; });
+      setCategoryOverrides(map);
+    } catch (e) {
+      console.error('Не удалось загрузить категории:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCategoryOverrides(selectedDate);
+  }, [selectedDate, loadCategoryOverrides]);
   const [calendarMonth, setCalendarMonth] = useState(new Date());
   const [monthStats, setMonthStats] = useState<Record<string, number>>({});
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
@@ -393,6 +420,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    saveTimerSettings(timerSettings);
+  }, [timerSettings]);
+
+  useEffect(() => {
     const handleFocus = () => {
       const now = Date.now();
       if (now - lastFetchTime.current < 10000) return;
@@ -442,13 +473,22 @@ function App() {
     };
 
     processedApps.forEach(app => {
-      const catInfo = getCategoryInfo(app.name);
-      groups[catInfo.id].totalTime += app.duration;
-      groups[catInfo.id].apps.push(app); 
+      const overrideCat = categoryOverrides[app.name];
+      const siteCat = customSiteCategories[app.name];
+      let catId: string;
+      if (overrideCat && groups[overrideCat]) {
+        catId = overrideCat;
+      } else if (siteCat && groups[siteCat]) {
+        catId = siteCat;
+      } else {
+        catId = getCategoryInfo(app.name).id;
+      }
+      groups[catId].totalTime += app.duration;
+      groups[catId].apps.push(app); 
     });
     Object.values(groups).forEach(g => g.apps.sort((a, b) => b.duration - a.duration));
     return groups;
-  }, [processedApps]);
+  }, [processedApps, customSiteCategories, categoryOverrides]);
 
   const barChartData = useMemo(() => Object.values(categorizedData)
     .filter(cat => cat.totalTime > 0)
@@ -467,14 +507,37 @@ function App() {
   const [actionConfirm, setActionConfirm] = useState<{ type: 'ignore' | 'unignore' | 'delete', appName: string } | null>(null);
   const [renameModal, setRenameModal] = useState<{ visible: boolean, originalName: string, currentName: string } | null>(null);
 
+  const [categorySubmenuOpen, setCategorySubmenuOpen] = useState(false);
+
   const handleAppContextMenu = useCallback((e: React.MouseEvent, appName: string) => {
     e.preventDefault();
+    setCategorySubmenuOpen(false);
     setContextMenu({ visible: true, x: e.clientX, y: e.clientY, appName });
   }, []);
 
   const closeContextMenu = useCallback(() => {
     if (contextMenu?.visible) setContextMenu(null);
+    setCategorySubmenuOpen(false);
   }, [contextMenu]);
+
+  const getCurrentCategoryId = useCallback((appName: string) => {
+    const overrideCat = categoryOverrides[appName];
+    if (overrideCat) return overrideCat;
+    const siteCat = customSiteCategories[appName];
+    if (siteCat) return siteCat;
+    return getCategoryInfo(appName).id;
+  }, [categoryOverrides, customSiteCategories]);
+
+  const changeAppCategory = useCallback(async (appName: string, categoryId: string) => {
+    try {
+      await invoke<string>('set_app_category', { appName, category: categoryId });
+      await loadCategoryOverrides(selectedDate);
+    } catch (e) {
+      console.error('Не удалось сменить категорию:', e);
+    }
+    setContextMenu(null);
+    setCategorySubmenuOpen(false);
+  }, [loadCategoryOverrides, selectedDate]);
 
   const executeAction = async () => {
     if (!actionConfirm) return;
@@ -623,8 +686,8 @@ function App() {
             <div 
               className="fixed z-[100] bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-100 dark:border-slate-700 overflow-hidden flex flex-col py-1 min-w-[220px] animate-in fade-in zoom-in-95 duration-100"
               style={{ 
-                left: Math.min(contextMenu.x, window.innerWidth - 220), 
-                top: Math.min(contextMenu.y, window.innerHeight - 120) 
+                left: Math.min(contextMenu.x, window.innerWidth - 240), 
+                top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - (categorySubmenuOpen ? 380 : 170))) 
               }}
               onClick={(e) => e.stopPropagation()}
             >
@@ -638,6 +701,43 @@ function App() {
                 <span className="opacity-70">✏️</span>
                 <span>Изменить название</span>
               </button>
+
+              <button
+                onClick={() => setCategorySubmenuOpen(open => !open)}
+                className="px-4 py-2.5 text-sm font-medium text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors flex items-center space-x-2"
+              >
+                <span className="opacity-70">📁</span>
+                <span className="flex-1">Категория</span>
+                <span className="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1">
+                  {(() => {
+                    const cur = CATEGORY_LIST.find(c => c.id === getCurrentCategoryId(contextMenu.appName));
+                    return cur ? <><span>{cur.icon}</span><span>{cur.label}</span></> : null;
+                  })()}
+                </span>
+                <span className="text-slate-400 text-xs">{categorySubmenuOpen ? '▾' : '▸'}</span>
+              </button>
+
+              {categorySubmenuOpen && (
+                <div className="bg-slate-50 dark:bg-slate-900/50 border-y border-slate-100 dark:border-slate-700 py-1">
+                  {CATEGORY_LIST.map(cat => {
+                    const isCurrent = getCurrentCategoryId(contextMenu.appName) === cat.id;
+                    return (
+                      <button
+                        key={cat.id}
+                        onClick={() => changeAppCategory(contextMenu.appName, cat.id)}
+                        className={`w-full px-4 py-2 text-sm font-medium text-left transition-colors flex items-center space-x-2 ${isCurrent ? 'text-indigo-600 dark:text-indigo-400 font-semibold' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700/50'}`}
+                      >
+                        <span>{cat.icon}</span>
+                        <span className="flex-1">{cat.label}</span>
+                        {isCurrent && <span className="text-xs">✓</span>}
+                      </button>
+                    );
+                  })}
+                  <p className="px-4 pt-1.5 pb-1 text-[11px] leading-snug text-slate-400 dark:text-slate-500">
+                    Применится с сегодняшнего дня. Прошлые дни останутся как были.
+                  </p>
+                </div>
+              )}
               {ignoredApps.includes(contextMenu.appName) ? (
                 <button 
                   onClick={() => { setActionConfirm({ type: 'unignore', appName: contextMenu.appName }); setContextMenu(null); }}

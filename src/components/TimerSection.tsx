@@ -43,7 +43,9 @@ const TimerSection: React.FC<TimerSectionProps> = ({
 
   const timerRadius = 130;
   const timerCircumference = 2 * Math.PI * timerRadius;
-  const timerOffset = timerCircumference - (timeLeft / totalPhaseTime) * timerCircumference;
+  const timerOffset = totalPhaseTime > 0
+    ? timerCircumference - (timeLeft / totalPhaseTime) * timerCircumference
+    : 0;
 
   const isTimerValid = timerSettings.workMinutes !== '' && timerSettings.restMinutes !== '' && timerSettings.cycles !== '';
 
