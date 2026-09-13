@@ -221,7 +221,18 @@ fn get_clean_name(
         if !lower_title.is_empty() {
             let custom_hit = custom_sites.iter().find(|site| {
                 let pattern = site.pattern.to_lowercase();
-                !pattern.is_empty() && lower_title.contains(&pattern)
+                if pattern.is_empty() {
+                    return false;
+                }
+                if lower_title.contains(&pattern) {
+                    return true;
+                }
+                if let Some(domain_name) = pattern.split('.').next() {
+                    if domain_name.len() >= 3 && lower_title.contains(domain_name) {
+                        return true;
+                    }
+                }
+                false
             });
 
             if let Some(hit) = custom_hit {

@@ -684,10 +684,10 @@ function App() {
 
           {contextMenu && contextMenu.visible && (
             <div 
-              className="fixed z-[100] bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-100 dark:border-slate-700 overflow-hidden flex flex-col py-1 min-w-[220px] animate-in fade-in zoom-in-95 duration-100"
+              className="fixed z-[100] bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-100 dark:border-slate-700 overflow-y-auto max-h-[calc(100vh-32px)] custom-scrollbar flex flex-col py-1 min-w-[240px] animate-in fade-in zoom-in-95 duration-100 transition-[top] duration-150 ease-out"
               style={{ 
-                left: Math.min(contextMenu.x, window.innerWidth - 240), 
-                top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - (categorySubmenuOpen ? 380 : 170))) 
+                left: Math.max(16, Math.min(contextMenu.x, window.innerWidth - 260)), 
+                top: Math.max(16, Math.min(contextMenu.y, window.innerHeight - (categorySubmenuOpen ? 450 : 220) - 16)) 
               }}
               onClick={(e) => e.stopPropagation()}
             >
